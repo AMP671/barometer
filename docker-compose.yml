@@ -1,0 +1,31 @@
+services:
+  barometer-app:
+    build: .
+    container_name: barometer-app
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgres://barometer:${POSTGRES_PASSWORD}@barometer-db:5432/barometer
+      OWM_API_KEY: ${OWM_API_KEY}
+      BUILD_ID: ${BUILD_ID:-dev}
+    ports:
+      # CHANGE 4300 to an unused port on Byte before first deploy —
+      # check with: ss -tlnp | grep LISTEN
+      - "4300:3000"
+    depends_on:
+      - barometer-db
+
+  barometer-db:
+    image: postgres:16-alpine
+    container_name: barometer-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: barometer
+      POSTGRES_USER: barometer
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - barometer-db-data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+volumes:
+  barometer-db-data:
