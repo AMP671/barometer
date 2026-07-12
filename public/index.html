@@ -788,6 +788,31 @@ function parseAdmiraltyTime(dateTimeStr) {
   return new Date(dateTimeStr.endsWith('Z') ? dateTimeStr : dateTimeStr + 'Z');
 }
 
+function groupEventsByDay(events) {
+  const groups = [];
+  let currentKey = null, currentGroup = null;
+  events.forEach((e) => {
+    const d = parseAdmiraltyTime(e.DateTime);
+    const key = d.toDateString();
+    if (key !== currentKey) {
+      currentKey = key;
+      currentGroup = { key, date: d, events: [] };
+      groups.push(currentGroup);
+    }
+    currentGroup.events.push(e);
+  });
+  return groups;
+}
+
+function dayLabel(date) {
+  const today = new Date();
+  const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const diffDays = Math.round((startOfDay(date) - startOfDay(today)) / 86400000);
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'Tomorrow';
+  return date.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+}
+
 // Builds a coarse lat/lon grid around a center point, synoptic-scale
 // (roughly continent-wide) so isobar curvature is actually visible.
 function buildGrid(centerLat, centerLon) {
@@ -1115,26 +1140,34 @@ function TideSection({ location, tideStations, marine, currentTime }) {
   // Official data available and loaded — this takes priority.
   if (station && events) {
     const now = Date.now();
-    const upcoming = events
-      .filter((e) => parseAdmiraltyTime(e.DateTime).getTime() > now)
-      .slice(0, 3);
+    const upcoming = events.filter((e) => parseAdmiraltyTime(e.DateTime).getTime() > now);
+    const days = groupEventsByDay(upcoming);
     return (
       <div className="card">
         <div className="card-label">Tide — {station.name} (Official, UKHO)</div>
-        {upcoming.length === 0 ? (
+        {days.length === 0 ? (
           <p className="empty-hint" style={{ padding: 0 }}>No upcoming events in range.</p>
         ) : (
-          upcoming.map((e, i) => (
-            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderTop: i > 0 ? '1px solid var(--line)' : 'none' }}>
-              <span style={{ fontSize: 14 }}>{e.EventType === 'HighWater' ? 'High Water' : 'Low Water'}</span>
-              <span className="mono" style={{ fontSize: 14 }}>
-                {parseAdmiraltyTime(e.DateTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {e.Height.toFixed(1)} m
-              </span>
-            </div>
-          ))
+          <div style={{ maxHeight: 280, overflowY: 'auto' }}>
+            {days.map((day) => (
+              <div key={day.key} style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--ink-soft)', letterSpacing: '0.04em', margin: '8px 0 2px', fontFamily: "'IBM Plex Mono', monospace" }}>
+                  {dayLabel(day.date).toUpperCase()}
+                </div>
+                {day.events.map((e, i) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderTop: '1px solid var(--line)' }}>
+                    <span style={{ fontSize: 14 }}>{e.EventType === 'HighWater' ? 'High Water' : 'Low Water'}</span>
+                    <span className="mono" style={{ fontSize: 14 }}>
+                      {parseAdmiraltyTime(e.DateTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {e.Height.toFixed(1)} m
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
         )}
         <div style={{ fontSize: 10, color: 'var(--ink-soft)', marginTop: 10, fontFamily: "'IBM Plex Mono', monospace" }}>
-          Contains ADMIRALTY® tidal data: © Crown copyright and database right
+          Contains ADMIRALTY® tidal data: © Crown copyright and database right — up to 7 days ahead (Discovery tier limit)
         </div>
       </div>
     );
