@@ -278,6 +278,67 @@
     border: 1px solid var(--line);
   }
 
+  /* ---------- Route planner ---------- */
+  .route-panel {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 40%;
+    background: var(--panel);
+    border-top: 1px solid var(--line);
+    border-radius: 16px 16px 0 0;
+    padding: 12px 16px calc(env(safe-area-inset-bottom, 0px) + 14px);
+    display: flex;
+    flex-direction: column;
+    z-index: 900;
+    box-shadow: 0 -4px 14px rgba(0,0,0,0.12);
+  }
+  .route-panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+  .route-scroll { overflow-y: auto; flex: 1; }
+  .route-summary {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    padding: 12px 4px 4px;
+    border-top: 1px solid var(--line);
+    margin-top: 6px;
+  }
+  .speed-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--line);
+    margin-top: 8px;
+  }
+  .speed-input {
+    width: 64px;
+    background: var(--panel-raised);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 6px 8px;
+    font-size: 15px;
+    color: var(--ink);
+  }
+  .watch-btn {
+    background: var(--case);
+    color: var(--panel-raised);
+    padding: 13px 0;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+  }
+  .watch-btn.active { background: var(--storm); }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+  }
+
   /* ---------- Bottom nav ---------- */
   .bottom-nav {
     position: fixed;
@@ -459,6 +520,17 @@ const Icon = {
       <line x1="8" y1="3" x2="8" y2="18" /><line x1="16" y1="6" x2="16" y2="21" />
     </svg>
   ),
+  Route: (p) => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <circle cx="5" cy="6" r="2.3" /><circle cx="19" cy="18" r="2.3" />
+      <path d="M7 7.5C10 10 8 13 11 15s5 1 8 3" strokeDasharray="1 3.4" />
+    </svg>
+  ),
+  Target: (p) => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="4.5" /><circle cx="12" cy="12" r="0.8" fill="currentColor" />
+    </svg>
+  ),
   ArrowUp: (p) => (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" {...p}>
       <line x1="12" y1="19" x2="12" y2="5" /><polyline points="6 11 12 5 18 11" />
@@ -604,6 +676,70 @@ async function fetchWeather(lat, lon) {
   const r = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`);
   if (!r.ok) throw new Error('weather fetch failed');
   return r.json();
+}
+
+// Marine conditions — wave/swell/sea temp/ocean current/approximate tide.
+// Only meaningful for coastal/sea locations; inland lakes and rivers return
+// no data here since these are ocean wave models, not river/lake models.
+async function fetchMarine(lat, lon) {
+  const params = new URLSearchParams({
+    latitude: lat,
+    longitude: lon,
+    current: 'wave_height,wave_direction,wave_period,swell_wave_height,swell_wave_direction,swell_wave_period,sea_surface_temperature,ocean_current_velocity,ocean_current_direction',
+    hourly: 'sea_level_height_msl',
+    length_unit: 'metric',
+    wind_speed_unit: 'kn',
+    timezone: 'auto',
+    past_days: '1',
+    forecast_days: '2',
+  });
+  const r = await fetch(`https://marine-api.open-meteo.com/v1/marine?${params}`);
+  if (!r.ok) throw new Error('marine fetch failed');
+  return r.json();
+}
+
+// Standard Beaufort scale, thresholds in knots.
+function beaufort(knots) {
+  const scale = [
+    [1, 0, 'Calm'], [3, 1, 'Light air'], [6, 2, 'Light breeze'], [10, 3, 'Gentle breeze'],
+    [16, 4, 'Moderate breeze'], [21, 5, 'Fresh breeze'], [27, 6, 'Strong breeze'],
+    [33, 7, 'Near gale'], [40, 8, 'Gale'], [47, 9, 'Strong gale'],
+    [55, 10, 'Storm'], [63, 11, 'Violent storm'], [Infinity, 12, 'Hurricane'],
+  ];
+  for (const [max, force, label] of scale) {
+    if (knots < max) return { force, label };
+  }
+  return { force: 12, label: 'Hurricane' };
+}
+
+// Finds local peaks/troughs in a sea-level time series — an approximate
+// high/low tide finder. This is model output, not an official harmonic
+// tide-table prediction; treat timing as indicative, not precise.
+function findTideExtrema(times, heights) {
+  const extrema = [];
+  for (let i = 1; i < heights.length - 1; i++) {
+    if (heights[i] > heights[i - 1] && heights[i] > heights[i + 1]) extrema.push({ time: times[i], height: heights[i], type: 'high' });
+    if (heights[i] < heights[i - 1] && heights[i] < heights[i + 1]) extrema.push({ time: times[i], height: heights[i], type: 'low' });
+  }
+  return extrema;
+}
+
+// Haversine great-circle distance in km, and initial compass bearing —
+// verified against known reference points (London→Paris ≈ 344km) before use.
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const toRad = (d) => (d * Math.PI) / 180;
+  const R = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+function initialBearing(lat1, lon1, lat2, lon2) {
+  const toRad = (d) => (d * Math.PI) / 180;
+  const toDeg = (r) => (r * 180) / Math.PI;
+  const y = Math.sin(toRad(lon2 - lon1)) * Math.cos(toRad(lat2));
+  const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) - Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(toRad(lon2 - lon1));
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
 }
 
 // Builds a coarse lat/lon grid around a center point, synoptic-scale
@@ -907,7 +1043,7 @@ function LocationSheet({ state, setState, onClose }) {
 /* ---------------------------------------------------------------------
    Gauge view
 --------------------------------------------------------------------- */
-function GaugeView({ weather, windUnit }) {
+function GaugeView({ weather, marine, windUnit }) {
   if (!weather) {
     return <div className="view"><p className="empty-hint" style={{ padding: 24 }}>Loading conditions…</p></div>;
   }
@@ -933,6 +1069,29 @@ function GaugeView({ weather, windUnit }) {
   if (hourly.uv_index && hourly.uv_index[nowIdx] != null) uvNow = hourly.uv_index[nowIdx];
 
   const moon = moonPhase(new Date());
+  const bf = beaufort(windKn);
+
+  // Marine data only exists for coastal/sea coordinates — inland lakes and
+  // rivers return null for these fields, so every marine section below is
+  // conditional on actually having a number to show.
+  const mcur = marine && marine.current;
+  const hasWave = mcur && typeof mcur.wave_height === 'number';
+  const hasTide = marine && marine.hourly && Array.isArray(marine.hourly.sea_level_height_msl);
+
+  let tideNow = null, tideTrend = null, nextExtreme = null, tideHistory = null;
+  if (hasTide) {
+    const tTimes = marine.hourly.time;
+    const tHeights = marine.hourly.sea_level_height_msl;
+    let tIdx = tTimes.indexOf(cur.time);
+    if (tIdx === -1) tIdx = Math.min(tTimes.length - 1, Math.floor(tTimes.length / 2));
+    tideNow = tHeights[tIdx];
+    const tPrev = tHeights[Math.max(0, tIdx - 1)];
+    tideTrend = tideNow > tPrev ? 'rising' : tideNow < tPrev ? 'falling' : 'steady';
+    const extrema = findTideExtrema(tTimes, tHeights);
+    nextExtreme = extrema.find((e) => tTimes.indexOf(e.time) > tIdx) || null;
+    const tideStart = Math.max(0, tIdx - 12);
+    tideHistory = tHeights.slice(tideStart, tIdx + 13);
+  }
 
   return (
     <div className="view">
@@ -993,6 +1152,9 @@ function GaugeView({ weather, windUnit }) {
                 <SevenSegDigit char={String(windDisplay).padStart(2,'0')[1]} size={22} />
                 <span className="lcd-unit" style={{ color: 'var(--ink-soft)', fontSize: 11 }}>{windUnitLabel}</span>
               </div>
+              <div style={{ fontSize: 11, color: 'var(--ink-soft)', marginTop: 4, fontFamily: "'IBM Plex Mono', monospace" }}>
+                FORCE {bf.force} · {bf.label.toUpperCase()}
+              </div>
             </div>
           </div>
         </div>
@@ -1005,6 +1167,47 @@ function GaugeView({ weather, windUnit }) {
           </div>
         </div>
       </Section>
+
+      {hasWave ? (
+        <Section title="Sea Conditions" defaultOpen={true}>
+          <div className="stat">
+            <span className="label">WAVE HEIGHT</span>
+            <span className="value mono">{mcur.wave_height.toFixed(1)} m</span>
+          </div>
+          <div className="stat">
+            <span className="label">WAVE PERIOD</span>
+            <span className="value mono">{mcur.wave_period != null ? mcur.wave_period.toFixed(0) + ' s' : '—'}</span>
+          </div>
+          <div className="stat">
+            <span className="label">SWELL</span>
+            <span className="value mono">
+              {mcur.swell_wave_height != null ? mcur.swell_wave_height.toFixed(1) + ' m' : '—'}
+              {mcur.swell_wave_direction != null ? ` from ${compassLabel(mcur.swell_wave_direction)}` : ''}
+            </span>
+          </div>
+          <div className="stat">
+            <span className="label">WATER TEMP</span>
+            <span className="value mono">{mcur.sea_surface_temperature != null ? mcur.sea_surface_temperature.toFixed(0) + '°C' : '—'}</span>
+          </div>
+        </Section>
+      ) : (
+        <div className="empty-hint" style={{ margin: '0 18px 14px' }}>
+          No sea/wave data at this location — marine forecasts only cover coastal and open water, not inland lakes or rivers.
+        </div>
+      )}
+
+      {hasTide && (
+        <div className="card">
+          <div className="card-label">Tide (modeled — not an official tide table)</div>
+          <Sparkline values={tideHistory} />
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 13, color: 'var(--ink-soft)' }}>
+            <span>{tideNow != null ? `${tideNow.toFixed(1)} m, ${tideTrend}` : '—'}</span>
+            <span>
+              {nextExtreme ? `Next ${nextExtreme.type}: ${new Date(nextExtreme.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
+            </span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1091,11 +1294,304 @@ function MapView({ location }) {
 }
 
 /* ---------------------------------------------------------------------
+   Route view — tap the map to add waypoints; distance/bearing per leg,
+   and a drift-adjusted ETA using ocean current where it's available.
+   Routes are session-only (not saved) in this version.
+--------------------------------------------------------------------- */
+const KN_TO_KMH = 1.852;
+
+function RouteView({ location, marine, windUnit }) {
+  const mapRef = useRef(null);
+  const leafletRef = useRef(null);
+  const layerRef = useRef(null);
+  const [waypoints, setWaypoints] = useState([]);
+  const [plannedSpeed, setPlannedSpeed] = useState(3);
+
+  useEffect(() => {
+    if (!location || leafletRef.current) return;
+    const map = L.map(mapRef.current, { zoomControl: true }).setView([location.lat, location.lon], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors',
+      maxZoom: 18,
+    }).addTo(map);
+    map.on('click', (e) => {
+      setWaypoints((wp) => [...wp, { lat: e.latlng.lat, lon: e.latlng.lng }]);
+    });
+    leafletRef.current = map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location]);
+
+  useEffect(() => {
+    if (!leafletRef.current) return;
+    if (layerRef.current) leafletRef.current.removeLayer(layerRef.current);
+    const group = L.layerGroup();
+    waypoints.forEach((wp, i) => {
+      L.marker([wp.lat, wp.lon], {
+        icon: L.divIcon({ className: 'isobar-label', html: String(i + 1), iconSize: [22, 22] }),
+      }).addTo(group);
+    });
+    if (waypoints.length > 1) {
+      L.polyline(waypoints.map((w) => [w.lat, w.lon]), { color: '#20241E', weight: 2.5, dashArray: '6 5' }).addTo(group);
+    }
+    group.addTo(leafletRef.current);
+    layerRef.current = group;
+  }, [waypoints]);
+
+  const legs = [];
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    const a = waypoints[i], b = waypoints[i + 1];
+    legs.push({
+      distanceKm: haversineKm(a.lat, a.lon, b.lat, b.lon),
+      bearing: initialBearing(a.lat, a.lon, b.lat, b.lon),
+    });
+  }
+  const totalKm = legs.reduce((s, l) => s + l.distanceKm, 0);
+
+  const hasCurrent = marine && marine.current && typeof marine.current.ocean_current_velocity === 'number';
+  const currentKn = hasCurrent ? marine.current.ocean_current_velocity : 0;
+  // Ocean current direction is the direction the water flows TOWARD
+  // (opposite convention to wind, which is reported as the direction it
+  // blows FROM) — worth sanity-checking against a local current chart
+  // before relying on this for real route timing.
+  const currentDir = hasCurrent ? marine.current.ocean_current_direction : 0;
+  const plannedSpeedKn = windUnit === 'mph' ? plannedSpeed / KN_TO_MPH : plannedSpeed;
+
+  let totalHours = 0, unreachable = false;
+  legs.forEach((leg) => {
+    const along = hasCurrent ? currentKn * Math.cos(((currentDir - leg.bearing) * Math.PI) / 180) : 0;
+    const effectiveKn = plannedSpeedKn + along;
+    if (effectiveKn <= 0.05) { unreachable = true; return; }
+    totalHours += leg.distanceKm / (effectiveKn * KN_TO_KMH);
+  });
+
+  function formatDuration(hours) {
+    const h = Math.floor(hours);
+    const m = Math.round((hours - h) * 60);
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+  }
+
+  return (
+    <div className="view map-view">
+      <div id="map" ref={mapRef} style={{ bottom: '40%' }}></div>
+      <div className="route-panel">
+        <div className="route-panel-head">
+          <span className="card-label" style={{ margin: 0 }}>Route ({waypoints.length} point{waypoints.length === 1 ? '' : 's'})</span>
+          <button className="icon-btn" onClick={() => setWaypoints([])} aria-label="Clear route"><Icon.Trash /></button>
+        </div>
+        {waypoints.length < 2 ? (
+          <p className="empty-hint">Tap the map to drop waypoints and build a route.</p>
+        ) : (
+          <div className="route-scroll">
+            {legs.map((leg, i) => (
+              <div className="fav-row" key={i}>
+                <div className="fav-main">
+                  <span className="name">Leg {i + 1} → {i + 2}</span>
+                  <span className="sub">{leg.distanceKm.toFixed(2)} km · bearing {leg.bearing.toFixed(0)}°</span>
+                </div>
+              </div>
+            ))}
+            <div className="route-summary">
+              <div className="stat">
+                <span className="label">TOTAL DISTANCE</span>
+                <span className="value mono">{totalKm.toFixed(2)} km</span>
+              </div>
+              <div className="stat">
+                <span className="label">EST. TIME{hasCurrent ? ' (CURRENT-ADJUSTED)' : ''}</span>
+                <span className="value mono">{unreachable ? 'Current opposes travel' : formatDuration(totalHours)}</span>
+              </div>
+            </div>
+            {!hasCurrent && (
+              <div className="empty-hint" style={{ padding: '4px 4px 0' }}>No ocean current data here — time estimate uses planned speed only.</div>
+            )}
+          </div>
+        )}
+        <div className="speed-row">
+          <span className="card-label" style={{ margin: 0 }}>Planned speed</span>
+          <input
+            type="number"
+            className="speed-input mono"
+            value={plannedSpeed}
+            min="0.1"
+            step="0.1"
+            onChange={(e) => setPlannedSpeed(Math.max(0.1, Number(e.target.value) || 0))}
+          />
+          <span className="lcd-unit" style={{ color: 'var(--ink-soft)', fontSize: 12 }}>{windUnit === 'mph' ? 'MPH' : 'KN'}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------
+   Drift view — GPS drift-from-anchor alert for a rest stop or a swim
+   entry point. Read the safety note before relying on this on the water.
+--------------------------------------------------------------------- */
+function DriftView() {
+  const [watching, setWatching] = useState(false);
+  const [anchor, setAnchor] = useState(null);
+  const [distance, setDistance] = useState(null);
+  const [threshold, setThreshold] = useState(50);
+  const [alarm, setAlarm] = useState(false);
+  const [error, setError] = useState(null);
+  const watchIdRef = useRef(null);
+  const wakeLockRef = useRef(null);
+  const audioCtxRef = useRef(null);
+  const beepIntervalRef = useRef(null);
+
+  function beepOnce() {
+    try {
+      const ctx = audioCtxRef.current;
+      if (!ctx) return;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.3, ctx.currentTime + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.3);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.3);
+    } catch {}
+  }
+
+  function startAlarmSound() {
+    if (beepIntervalRef.current) return;
+    beepOnce();
+    beepIntervalRef.current = setInterval(beepOnce, 700);
+  }
+  function stopAlarmSound() {
+    if (beepIntervalRef.current) {
+      clearInterval(beepIntervalRef.current);
+      beepIntervalRef.current = null;
+    }
+  }
+
+  async function startWatch() {
+    setError(null);
+    if (!('geolocation' in navigator)) {
+      setError('Geolocation is not available in this browser.');
+      return;
+    }
+    try {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      audioCtxRef.current = new AudioContextClass();
+      if (audioCtxRef.current.state === 'suspended') await audioCtxRef.current.resume();
+    } catch {}
+
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const a = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+        setAnchor(a);
+        setDistance(0);
+        setWatching(true);
+        try {
+          if ('wakeLock' in navigator) {
+            wakeLockRef.current = await navigator.wakeLock.request('screen');
+          }
+        } catch {}
+        watchIdRef.current = navigator.geolocation.watchPosition(
+          (p) => {
+            const d = haversineKm(a.lat, a.lon, p.coords.latitude, p.coords.longitude) * 1000;
+            setDistance(d);
+            setAlarm((wasAlarm) => {
+              const isAlarm = d > threshold;
+              if (isAlarm && !wasAlarm) startAlarmSound();
+              if (!isAlarm && wasAlarm) stopAlarmSound();
+              return isAlarm;
+            });
+          },
+          () => setError('Lost GPS signal — position updates stopped.'),
+          { enableHighAccuracy: true, maximumAge: 5000 }
+        );
+      },
+      () => setError('Location permission denied or unavailable.'),
+      { enableHighAccuracy: true }
+    );
+  }
+
+  function stopWatch() {
+    if (watchIdRef.current != null) navigator.geolocation.clearWatch(watchIdRef.current);
+    watchIdRef.current = null;
+    if (wakeLockRef.current) { wakeLockRef.current.release().catch(() => {}); wakeLockRef.current = null; }
+    stopAlarmSound();
+    setWatching(false);
+    setAlarm(false);
+    setAnchor(null);
+    setDistance(null);
+  }
+
+  useEffect(() => () => stopWatch(), []);
+
+  const distDigits = distance != null ? String(Math.min(9999, Math.round(distance))).padStart(4, '0') : '----';
+
+  return (
+    <div className="view">
+      <div className="dial-wrap" style={{ paddingTop: 22 }}>
+        <div className="lcd-panel" style={{ margin: 0, width: '100%', maxWidth: 320 }}>
+          <div className="lcd-screw" style={{ top: 8, left: 8 }} />
+          <div className="lcd-screw" style={{ top: 8, right: 8 }} />
+          <div className="lcd-screw" style={{ bottom: 8, left: 8 }} />
+          <div className="lcd-screw" style={{ bottom: 8, right: 8 }} />
+          <div className="lcd-label">DISTANCE FROM START</div>
+          <div className="lcd-glass">
+            <SevenSegDisplay value={distDigits} size={40} />
+            <span className="lcd-unit">m</span>
+          </div>
+        </div>
+
+        {alarm && (
+          <div className="storm-banner" style={{ marginTop: 16, borderRadius: 12, animation: 'pulse 1s infinite' }}>
+            <Icon.Alert />
+            <span>Drifted past {threshold}m from your start point.</span>
+          </div>
+        )}
+        {error && (
+          <div className="empty-hint" style={{ marginTop: 14, textAlign: 'center' }}>{error}</div>
+        )}
+
+        <div className="speed-row" style={{ marginTop: 20, width: '100%', maxWidth: 320 }}>
+          <span className="card-label" style={{ margin: 0 }}>Alert radius</span>
+          <input
+            type="number"
+            className="speed-input mono"
+            value={threshold}
+            min="5"
+            step="5"
+            disabled={watching}
+            onChange={(e) => setThreshold(Math.max(5, Number(e.target.value) || 5))}
+          />
+          <span className="lcd-unit" style={{ color: 'var(--ink-soft)', fontSize: 12 }}>M</span>
+        </div>
+
+        <button
+          className={`watch-btn ${watching ? 'active' : ''}`}
+          style={{ marginTop: 16, width: '100%', maxWidth: 320 }}
+          onClick={watching ? stopWatch : startWatch}
+        >
+          {watching ? 'Stop Watch' : 'Start Watch'}
+        </button>
+
+        <div className="card" style={{ width: '100%', maxWidth: 320, boxSizing: 'border-box' }}>
+          <div className="card-label">Before you rely on this</div>
+          <p style={{ fontSize: 13, color: 'var(--ink-soft)', margin: 0, lineHeight: 1.5 }}>
+            This only works while the app is open on screen with your phone unlocked — iOS suspends web apps
+            in the background, so it will not wake a locked phone in a pocket or dry bag. Keep the screen on
+            and check Settings → Privacy → Location Services → Safari is set to "Precise" for an accurate
+            radius.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------
    App root
 --------------------------------------------------------------------- */
 function App() {
   const [state, setState] = useState(null);
   const [weather, setWeather] = useState(null);
+  const [marine, setMarine] = useState(null);
   const [tab, setTab] = useState('gauge');
   const [sheetOpen, setSheetOpen] = useState(false);
   const [lastFetchedAt, setLastFetchedAt] = useState(null);
@@ -1139,6 +1635,12 @@ function App() {
       setLastFetchedAt(new Date());
     } catch {
       // keep showing last-known data on failure
+    }
+    try {
+      const m = await fetchMarine(activeLocation.lat, activeLocation.lon);
+      setMarine(m);
+    } catch {
+      setMarine(null);
     } finally {
       if (isManual) setRefreshing(false);
     }
@@ -1190,9 +1692,10 @@ function App() {
         </div>
       )}
 
-      {tab === 'gauge'
-        ? <GaugeView weather={weather} windUnit={state.windUnit} />
-        : <MapView location={activeLocation} />}
+      {tab === 'gauge' && <GaugeView weather={weather} marine={marine} windUnit={state.windUnit} />}
+      {tab === 'map' && <MapView location={activeLocation} />}
+      {tab === 'route' && <RouteView location={activeLocation} marine={marine} windUnit={state.windUnit} />}
+      {tab === 'drift' && <DriftView />}
 
       <nav className="bottom-nav">
         <button className={`nav-btn ${tab === 'gauge' ? 'active' : ''}`} onClick={() => setTab('gauge')}>
@@ -1200,6 +1703,12 @@ function App() {
         </button>
         <button className={`nav-btn ${tab === 'map' ? 'active' : ''}`} onClick={() => setTab('map')}>
           <Icon.Map /> MAP
+        </button>
+        <button className={`nav-btn ${tab === 'route' ? 'active' : ''}`} onClick={() => setTab('route')}>
+          <Icon.Route /> ROUTE
+        </button>
+        <button className={`nav-btn ${tab === 'drift' ? 'active' : ''}`} onClick={() => setTab('drift')}>
+          <Icon.Target /> DRIFT
         </button>
       </nav>
 
