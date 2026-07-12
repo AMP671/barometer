@@ -4,7 +4,6 @@ const { Pool } = require('pg');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const OWM_API_KEY = process.env.OWM_API_KEY || '';
 
 // Build/version id used by the frontend to force-reload after a deploy.
 // Set BUILD_ID in docker-compose for a stable value across restarts of the
@@ -75,30 +74,6 @@ app.put('/api/state', async (req, res) => {
   } catch (err) {
     console.error('PUT /api/state failed', err);
     res.status(500).json({ error: 'Could not save state' });
-  }
-});
-
-// Proxies OpenWeatherMap's pressure map tiles so the API key stays server-side.
-// Cached for 30 minutes client-side, matching the app's refresh cadence.
-app.get('/api/tiles/pressure/:z/:x/:y', async (req, res) => {
-  if (!OWM_API_KEY) {
-    return res.status(503).json({ error: 'OWM_API_KEY not configured on the server' });
-  }
-  const { z, x, y } = req.params;
-  const yClean = y.replace(/\.png$/, '');
-  const url = `https://tile.openweathermap.org/map/pressure_new/${z}/${x}/${yClean}.png?appid=${OWM_API_KEY}`;
-  try {
-    const upstream = await fetch(url);
-    if (!upstream.ok) {
-      return res.status(upstream.status).end();
-    }
-    const buf = Buffer.from(await upstream.arrayBuffer());
-    res.set('Content-Type', 'image/png');
-    res.set('Cache-Control', 'public, max-age=1800');
-    res.send(buf);
-  } catch (err) {
-    console.error('Tile proxy failed', err);
-    res.status(502).json({ error: 'Tile fetch failed' });
   }
 });
 
