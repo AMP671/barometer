@@ -241,6 +241,31 @@
     border-radius: 20px;
     z-index: 1500;
   }
+  /* ---------- Day tabs ---------- */
+  .day-tabs {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .day-tab {
+    flex-shrink: 0;
+    padding: 7px 12px;
+    border-radius: 20px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink-soft);
+    white-space: nowrap;
+  }
+  .day-tab.active {
+    background: var(--case);
+    border-color: var(--case);
+    color: var(--panel-raised);
+  }
+
   .isobar-label {
     font-family: 'IBM Plex Mono', monospace;
     font-size: 10px;
@@ -583,6 +608,20 @@ function compassLabel(deg) {
   return dirs[Math.round(deg / 22.5) % 16];
 }
 
+// Classifies wind relative to a coastline's "seaward" bearing (the compass
+// direction pointing from the shore out to open water, set per-location by
+// the user — there's no reliable automatic way to infer this from a
+// coordinate alone). Wind direction is meteorological "from" convention,
+// so wind blowing FROM the seaward direction is onshore.
+function classifyShoreWind(windDir, seaward) {
+  if (seaward == null || windDir == null) return null;
+  const diff = ((windDir - seaward + 540) % 360) - 180;
+  const absDiff = Math.abs(diff);
+  if (absDiff <= 45) return 'Onshore';
+  if (absDiff >= 135) return 'Offshore';
+  return 'Cross-shore';
+}
+
 // Simplified 3-hour pressure tendency, loosely modelled on the classic
 // ship's-barometer dial words rather than the full WMO synoptic code.
 function classifyTrend(deltaHpa) {
@@ -642,10 +681,11 @@ async function fetchWeather(lat, lon) {
     longitude: lon,
     current: 'temperature_2m,relative_humidity_2m,apparent_temperature,pressure_msl,wind_speed_10m,wind_direction_10m',
     hourly: 'pressure_msl,uv_index',
+    daily: 'temperature_2m_max,temperature_2m_min,wind_speed_10m_max,wind_direction_10m_dominant,uv_index_max',
     wind_speed_unit: 'kn',
     timezone: 'auto',
     past_days: '1',
-    forecast_days: '2',
+    forecast_days: '7',
   });
   const r = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`);
   if (!r.ok) throw new Error('weather fetch failed');
@@ -655,17 +695,20 @@ async function fetchWeather(lat, lon) {
 // Marine conditions — wave/swell/sea temp/ocean current/approximate tide.
 // Only meaningful for coastal/sea locations; inland lakes and rivers return
 // no data here since these are ocean wave models, not river/lake models.
+// forecast_days capped at 7 to match the Admiralty tide data's own limit,
+// so the forecast horizon is consistent across the whole app.
 async function fetchMarine(lat, lon) {
   const params = new URLSearchParams({
     latitude: lat,
     longitude: lon,
     current: 'wave_height,wave_direction,wave_period,swell_wave_height,swell_wave_direction,swell_wave_period,sea_surface_temperature,ocean_current_velocity,ocean_current_direction',
     hourly: 'sea_level_height_msl',
+    daily: 'wave_height_max,wave_direction_dominant,swell_wave_height_max,swell_wave_direction_dominant',
     length_unit: 'metric',
     wind_speed_unit: 'kn',
     timezone: 'auto',
     past_days: '1',
-    forecast_days: '2',
+    forecast_days: '7',
   });
   const r = await fetch(`https://marine-api.open-meteo.com/v1/marine?${params}`);
   if (!r.ok) throw new Error('marine fetch failed');
@@ -1172,8 +1215,20 @@ function LocationSheet({ state, setState, onClose }) {
 }
 
 /* ---------------------------------------------------------------------
-   Gauge view
+   DayTabs — horizontal day picker, shared by the tide and forecast cards
 --------------------------------------------------------------------- */
+function DayTabs({ days, selected, onSelect }) {
+  return (
+    <div className="day-tabs">
+      {days.map((d, i) => (
+        <button key={i} className={`day-tab ${i === selected ? 'active' : ''}`} onClick={() => onSelect(i)}>
+          {dayLabel(d)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /* ---------------------------------------------------------------------
    Tide section — official Admiralty/UKHO data for UK & Ireland where a
    station is close enough to trust, modeled Open-Meteo curve everywhere
@@ -1185,6 +1240,7 @@ const TIDE_STATION_MAX_KM = 40;
 function TideSection({ location, tideStations, marine, currentTime }) {
   const [events, setEvents] = useState(null);
   const [loadError, setLoadError] = useState(false);
+  const [dayIdx, setDayIdx] = useState(0);
 
   const station = useMemo(() => {
     if (!location || !tideStations || tideStations.length === 0) return null;
@@ -1197,34 +1253,34 @@ function TideSection({ location, tideStations, marine, currentTime }) {
     fetchTideEvents(station.id).then(setEvents).catch(() => setLoadError(true));
   }, [station]);
 
+  useEffect(() => { setDayIdx(0); }, [events]);
+
   // Official data available and loaded — this takes priority.
   if (station && events) {
     const now = Date.now();
     const upcoming = events.filter((e) => parseAdmiraltyTime(e.DateTime).getTime() > now);
     const days = groupEventsByDay(upcoming);
+    const activeIdx = Math.min(dayIdx, Math.max(0, days.length - 1));
+    const activeDay = days[activeIdx];
     return (
       <div className="card">
         <div className="card-label">Tide — {station.name} (Official, UKHO)</div>
         {days.length === 0 ? (
           <p className="empty-hint" style={{ padding: 0 }}>No upcoming events in range.</p>
         ) : (
-          <div style={{ maxHeight: 280, overflowY: 'auto' }}>
-            {days.map((day) => (
-              <div key={day.key} style={{ marginBottom: 10 }}>
-                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--ink-soft)', letterSpacing: '0.04em', margin: '8px 0 2px', fontFamily: "'IBM Plex Mono', monospace" }}>
-                  {dayLabel(day.date).toUpperCase()}
+          <React.Fragment>
+            <DayTabs days={days.map((d) => d.date)} selected={activeIdx} onSelect={setDayIdx} />
+            <div style={{ marginTop: 10 }}>
+              {activeDay.events.map((e, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderTop: i > 0 ? '1px solid var(--line)' : 'none' }}>
+                  <span style={{ fontSize: 14 }}>{e.EventType === 'HighWater' ? 'High Water' : 'Low Water'}</span>
+                  <span className="mono" style={{ fontSize: 14 }}>
+                    {parseAdmiraltyTime(e.DateTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {e.Height.toFixed(1)} m
+                  </span>
                 </div>
-                {day.events.map((e, i) => (
-                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderTop: '1px solid var(--line)' }}>
-                    <span style={{ fontSize: 14 }}>{e.EventType === 'HighWater' ? 'High Water' : 'Low Water'}</span>
-                    <span className="mono" style={{ fontSize: 14 }}>
-                      {parseAdmiraltyTime(e.DateTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {e.Height.toFixed(1)} m
-                    </span>
-                  </div>
-                ))}
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          </React.Fragment>
         )}
         <div style={{ fontSize: 10, color: 'var(--ink-soft)', marginTop: 10, fontFamily: "'IBM Plex Mono', monospace" }}>
           Contains ADMIRALTY® tidal data: © Crown copyright and database right — up to 7 days ahead (Discovery tier limit)
@@ -1268,7 +1324,122 @@ function TideSection({ location, tideStations, marine, currentTime }) {
   );
 }
 
-function GaugeView({ weather, marine, windUnit, location, tideStations }) {
+/* ---------------------------------------------------------------------
+   Coast direction picker — sets which compass direction points out to
+   open water for a location, so wind can be classified as onshore/
+   offshore/cross-shore. There's no reliable way to infer this
+   automatically from a coordinate, so it's a one-time per-location
+   setting rather than something computed.
+--------------------------------------------------------------------- */
+function SeawardCompass({ value, onSelect }) {
+  const size = 180, cx = 90, cy = 90, r = 66;
+  const dirs = [
+    { deg: 0, label: 'N' }, { deg: 45, label: 'NE' }, { deg: 90, label: 'E' }, { deg: 135, label: 'SE' },
+    { deg: 180, label: 'S' }, { deg: 225, label: 'SW' }, { deg: 270, label: 'W' }, { deg: 315, label: 'NW' },
+  ];
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+      <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--line)" strokeWidth="1.5" />
+      <circle cx={cx} cy={cy} r="3" fill="var(--ink-soft)" />
+      {dirs.map(({ deg, label }) => {
+        const rad = ((deg - 90) * Math.PI) / 180;
+        const x = cx + r * Math.cos(rad), y = cy + r * Math.sin(rad);
+        const active = value === deg;
+        return (
+          <g key={deg} onClick={() => onSelect(deg)} style={{ cursor: 'pointer' }}>
+            <circle cx={x} cy={y} r="17" fill={active ? 'var(--accent)' : 'var(--panel-raised)'} stroke="var(--line)" />
+            <text x={x} y={y + 4} textAnchor="middle" fontSize="12" fontWeight="600" fill={active ? 'var(--panel-raised)' : 'var(--ink)'}>{label}</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function CoastDirectionSheet({ location, onSelect, onClose }) {
+  return (
+    <div className="sheet-backdrop" onClick={onClose}>
+      <div className="sheet" style={{ maxHeight: '60vh' }} onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-grip" />
+        <div className="sheet-title-row">
+          <h2>Which way is the sea?</h2>
+          <button className="icon-btn" onClick={onClose} aria-label="Close"><Icon.Close /></button>
+        </div>
+        <p className="empty-hint" style={{ padding: '0 0 12px' }}>
+          For {location ? location.label : 'this location'} — pick the compass direction pointing from the shore out to open water. Used to work out onshore/offshore wind.
+        </p>
+        <div style={{ display: 'flex', justifyContent: 'center', paddingBottom: 10 }}>
+          <SeawardCompass value={location ? location.seaward : null} onSelect={(deg) => { onSelect(deg); onClose(); }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------
+   Forecast section — 7-day outlook (temp/wind/wave), same day-tab
+   pattern as the tide card, driven by the daily aggregates Open-Meteo
+   already returns rather than us aggregating hourly data ourselves.
+--------------------------------------------------------------------- */
+function ForecastSection({ weather, marine, windUnit, seaward }) {
+  const [dayIdx, setDayIdx] = useState(0);
+  const daily = weather && weather.daily;
+  if (!daily || !Array.isArray(daily.time) || daily.time.length === 0) return null;
+
+  const days = daily.time.map((t) => new Date(t + 'T12:00:00'));
+  const i = Math.min(dayIdx, days.length - 1);
+
+  const windKn = daily.wind_speed_10m_max ? daily.wind_speed_10m_max[i] : null;
+  const windDisplay = windKn != null ? (windUnit === 'mph' ? Math.round(windKn * KN_TO_MPH) : Math.round(windKn)) : null;
+  const windDir = daily.wind_direction_10m_dominant ? daily.wind_direction_10m_dominant[i] : null;
+  const bf = windKn != null ? beaufort(windKn) : null;
+  const shore = seaward != null && windDir != null ? classifyShoreWind(windDir, seaward) : null;
+
+  const mdaily = marine && marine.daily;
+  const hasWave = mdaily && Array.isArray(mdaily.wave_height_max) && mdaily.wave_height_max[i] != null;
+
+  return (
+    <div className="card">
+      <div className="card-label">7-Day Forecast</div>
+      <DayTabs days={days} selected={i} onSelect={setDayIdx} />
+      <div className="section-body" style={{ paddingTop: 12, paddingLeft: 0, paddingRight: 0 }}>
+        <div className="stat">
+          <span className="label">TEMP</span>
+          <span className="value mono">
+            {daily.temperature_2m_min ? daily.temperature_2m_min[i].toFixed(0) : '—'}–{daily.temperature_2m_max ? daily.temperature_2m_max[i].toFixed(0) : '—'}°C
+          </span>
+        </div>
+        <div className="stat">
+          <span className="label">UV MAX</span>
+          <span className="value mono">{daily.uv_index_max && daily.uv_index_max[i] != null ? daily.uv_index_max[i].toFixed(1) : '—'}</span>
+        </div>
+        <div className="stat">
+          <span className="label">WIND (MAX)</span>
+          <span className="value mono">{windDisplay != null ? `${windDisplay} ${windUnit === 'mph' ? 'MPH' : 'KN'}` : '—'}{bf ? ` · F${bf.force}` : ''}</span>
+        </div>
+        <div className="stat">
+          <span className="label">WIND DIR{shore ? ` · ${shore.toUpperCase()}` : ''}</span>
+          <span className="value">{windDir != null ? compassLabel(windDir) : '—'}</span>
+        </div>
+        {hasWave && (
+          <React.Fragment>
+            <div className="stat">
+              <span className="label">WAVE (MAX)</span>
+              <span className="value mono">{mdaily.wave_height_max[i].toFixed(1)} m</span>
+            </div>
+            <div className="stat">
+              <span className="label">SWELL (MAX)</span>
+              <span className="value mono">{mdaily.swell_wave_height_max && mdaily.swell_wave_height_max[i] != null ? mdaily.swell_wave_height_max[i].toFixed(1) + ' m' : '—'}</span>
+            </div>
+          </React.Fragment>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function GaugeView({ weather, marine, windUnit, location, tideStations, onUpdateLocation }) {
+  const [coastSheetOpen, setCoastSheetOpen] = useState(false);
   if (!weather) {
     return <div className="view"><p className="empty-hint" style={{ padding: 24 }}>Loading conditions…</p></div>;
   }
@@ -1296,6 +1467,7 @@ function GaugeView({ weather, marine, windUnit, location, tideStations }) {
 
   const moon = moonPhase(new Date());
   const bf = beaufort(windKn);
+  const shoreWind = location ? classifyShoreWind(cur.wind_direction_10m, location.seaward) : null;
 
   // Marine data only exists for coastal/sea coordinates — inland lakes and
   // rivers return null for these fields, so every marine section below is
@@ -1351,6 +1523,22 @@ function GaugeView({ weather, marine, windUnit, location, tideStations }) {
               <div style={{ fontSize: 11, color: 'var(--ink-soft)', marginTop: 4, fontFamily: "'IBM Plex Mono', monospace" }}>
                 FORCE {bf.force} · {bf.label.toUpperCase()}
               </div>
+              {shoreWind ? (
+                <button
+                  className="mono"
+                  style={{ fontSize: 11, color: 'var(--accent)', marginTop: 4, fontWeight: 600, padding: 0 }}
+                  onClick={() => setCoastSheetOpen(true)}
+                >
+                  {shoreWind.toUpperCase()} WIND
+                </button>
+              ) : (
+                <button
+                  style={{ fontSize: 11, color: 'var(--ink-soft)', marginTop: 4, textDecoration: 'underline', padding: 0 }}
+                  onClick={() => setCoastSheetOpen(true)}
+                >
+                  Set coast direction
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -1392,7 +1580,17 @@ function GaugeView({ weather, marine, windUnit, location, tideStations }) {
         </div>
       )}
 
+      <ForecastSection weather={weather} marine={marine} windUnit={windUnit} seaward={location ? location.seaward : null} />
+
       <TideSection location={location} tideStations={tideStations} marine={marine} currentTime={cur.time} />
+
+      {coastSheetOpen && (
+        <CoastDirectionSheet
+          location={location}
+          onSelect={(deg) => onUpdateLocation && location && onUpdateLocation(location.id, { seaward: deg })}
+          onClose={() => setCoastSheetOpen(false)}
+        />
+      )}
     </div>
   );
 }
@@ -1693,6 +1891,16 @@ function App() {
     return state.locations.find((l) => l.id === state.activeLocationId) || state.locations[0] || null;
   }, [state]);
 
+  function updateLocationField(locationId, patch) {
+    if (!state) return;
+    const next = {
+      ...state,
+      locations: state.locations.map((l) => (l.id === locationId ? { ...l, ...patch } : l)),
+    };
+    setState(next);
+    saveState(next);
+  }
+
   const loadWeather = useCallback(async (isManual) => {
     if (!activeLocation) return;
     if (isManual) setRefreshing(true);
@@ -1759,7 +1967,7 @@ function App() {
         </div>
       )}
 
-      {tab === 'gauge' && <GaugeView weather={weather} marine={marine} windUnit={state.windUnit} location={activeLocation} tideStations={tideStations} />}
+      {tab === 'gauge' && <GaugeView weather={weather} marine={marine} windUnit={state.windUnit} location={activeLocation} tideStations={tideStations} onUpdateLocation={updateLocationField} />}
       {tab === 'map' && <MapView location={activeLocation} />}
       {tab === 'route' && <RouteView location={activeLocation} marine={marine} windUnit={state.windUnit} />}
 
