@@ -6,7 +6,7 @@
 <title>Barometer</title>
 
 <link rel="manifest" href="/manifest.json" />
-<meta name="theme-color" content="#4B5851" />
+<meta name="theme-color" content="#211A0F" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="Barometer" />
@@ -21,18 +21,18 @@
 
 <style>
   :root {
-    --panel: #E7E5DA;
-    --panel-raised: #F1EFE4;
-    --case: #4B5851;
-    --case-light: #6C7A70;
-    --ink: #20241E;
-    --ink-soft: #5A6058;
-    --lcd-bg: #B8C6AC;
-    --lcd-ink: #1B2318;
-    --lcd-dim: rgba(27, 35, 24, 0.16);
+    --panel: #D99A44;
+    --panel-raised: #F0DDAE;
+    --case: #211A0F;
+    --case-light: #4A3B28;
+    --ink: #211A0F;
+    --ink-soft: #7A5C33;
+    --lcd-bg: #F0DDAE;
+    --lcd-ink: #211A0F;
+    --lcd-dim: rgba(33, 26, 15, 0.18);
     --storm: #A23E32;
-    --accent: #3D6A55;
-    --line: rgba(32, 36, 30, 0.14);
+    --accent: #211A0F;
+    --line: rgba(33, 26, 15, 0.18);
   }
 
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -99,7 +99,7 @@
   @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   .update-row {
     font-size: 12px;
-    color: rgba(241, 239, 228, 0.65);
+    color: rgba(240, 221, 174, 0.65);
     margin-top: 6px;
     font-family: 'IBM Plex Mono', monospace;
   }
@@ -278,7 +278,7 @@
     font-size: 10px;
     font-weight: 600;
     color: var(--ink);
-    background: rgba(241, 239, 228, 0.88);
+    background: rgba(240, 221, 174, 0.88);
     padding: 1px 5px;
     border-radius: 3px;
     white-space: nowrap;
@@ -362,7 +362,7 @@
     align-items: center;
     gap: 4px;
     padding: 10px 0 8px;
-    color: rgba(241,239,228,0.55);
+    color: rgba(240,221,174,0.55);
     font-size: 11px;
     letter-spacing: 0.03em;
     font-family: 'IBM Plex Mono', monospace;
@@ -372,7 +372,7 @@
   /* ---------- Sheet (location picker) ---------- */
   .sheet-backdrop {
     position: fixed; inset: 0;
-    background: rgba(32,36,30,0.5);
+    background: rgba(33,26,15,0.5);
     z-index: 2100;
     display: flex;
     align-items: flex-end;
@@ -602,8 +602,8 @@ function SevenSegDisplay({ value, size = 34 }) {
    Helpers
 --------------------------------------------------------------------- */
 const KN_TO_MPH = 1.15078;
-const ISOBAR_COLOR = '#4B5851';
-const ISOBAR_COLOR_MAJOR = '#20241E';
+const ISOBAR_COLOR = '#7A5C33';
+const ISOBAR_COLOR_MAJOR = '#211A0F';
 // Crowd-sourced nautical marks (buoys, lights, harbors, hazards) — same
 // OSM/ODbL ecosystem as the base map, free, no key. Per OpenSeaMap's own
 // wiki: a supplement for planning/awareness, not a substitute for an
@@ -899,8 +899,17 @@ function gridToLatLng(gx, gy, grid) {
    not just peeking round the edges of an opaque disc.
 --------------------------------------------------------------------- */
 function PressureGaugeArc({ pressure, width, height }) {
-  const cx = width / 2, cy = height * 0.5;
-  const r = height * 0.92;
+  // Solved against the actual box: the arc's top (at 270deg) must stay
+  // within the top margin, and the two open-ends (at 135/45deg, the
+  // lowest points the rim reaches) must stay within the bottom margin.
+  // Verified numerically before shipping — an earlier version of this
+  // formula (height * 0.92) pushed almost the whole arc off-canvas.
+  const marginTop = 15, marginBottom = 15, marginSide = 25;
+  const rFromHeight = (height - marginTop - marginBottom) / 1.8;
+  const rFromWidth = width / 2 - marginSide;
+  const r = Math.min(rFromHeight, rFromWidth);
+  const cy = r + marginTop;
+  const cx = width / 2;
   const min = 960, max = 1050;
   const startDeg = 135, endDeg = 405;
 
@@ -949,7 +958,7 @@ function PressureGaugeArc({ pressure, width, height }) {
       <path d={rimPath} fill="none" stroke="var(--ink)" strokeWidth="2" strokeLinecap="round" />
       {minorTicks}
       {majorTicks}
-      <line x1={cx} y1={cy} x2={nx} y2={ny} stroke="var(--storm)" strokeWidth="2.6" strokeLinecap="round" />
+      <line x1={cx} y1={cy} x2={nx} y2={ny} stroke="var(--ink)" strokeWidth="2.6" strokeLinecap="round" />
       <circle cx={cx} cy={cy} r="5" fill="var(--case)" />
     </svg>
   );
@@ -1017,8 +1026,8 @@ function TrendChartCanvas({ values, height, touchIdx, onTouchIdx }) {
         <polyline points={line} fill="none" stroke="var(--case)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" opacity="0.7" />
         {touchIdx != null && (
           <React.Fragment>
-            <line x1={pts[touchIdx][0]} y1={pad} x2={pts[touchIdx][0]} y2={h - pad} stroke="var(--storm)" strokeWidth="1" strokeDasharray="3 2" />
-            <circle cx={pts[touchIdx][0]} cy={pts[touchIdx][1]} r="4" fill="var(--storm)" />
+            <line x1={pts[touchIdx][0]} y1={pad} x2={pts[touchIdx][0]} y2={h - pad} stroke="var(--ink)" strokeWidth="1" strokeDasharray="3 2" />
+            <circle cx={pts[touchIdx][0]} cy={pts[touchIdx][1]} r="4" fill="var(--ink)" />
           </React.Fragment>
         )}
       </svg>
@@ -1035,8 +1044,8 @@ function WindCompass({ deg }) {
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ flexShrink: 0 }}>
       <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--line)" strokeWidth="1.5" />
       <text x={cx} y="9" fontSize="7" textAnchor="middle" fill="var(--ink-soft)">N</text>
-      <line x1={tailX} y1={tailY} x2={tipX} y2={tipY} stroke="var(--storm)" strokeWidth="2.4" strokeLinecap="round" />
-      <circle cx={tipX} cy={tipY} r="2.3" fill="var(--storm)" />
+      <line x1={tailX} y1={tailY} x2={tipX} y2={tipY} stroke="var(--ink)" strokeWidth="2.4" strokeLinecap="round" />
+      <circle cx={tipX} cy={tipY} r="2.3" fill="var(--ink)" />
     </svg>
   );
 }
@@ -1463,7 +1472,7 @@ function GaugeView({ weather, marine, windUnit, location, tideStations, onUpdate
       <div className="mono" style={{ fontSize: 12, color: 'var(--ink-soft)', textAlign: 'center', marginTop: 4 }}>
         {touchIdx != null
           ? `${historyValues[touchIdx].toFixed(1)} hPa${historyTimes[touchIdx] ? ' · ' + new Date(historyTimes[touchIdx]).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}`
-          : `Max ${Math.max(...historyValues).toFixed(1)} · Min ${Math.min(...historyValues).toFixed(1)} hPa — drag the chart for a reading`}
+          : `Max ${Math.max(...historyValues).toFixed(1)} · Min ${Math.min(...historyValues).toFixed(1)} hPa`}
       </div>
       <div className={`trend-row ${trend.dir === 'down' ? 'falling' : ''}`}>
         {trend.dir === 'up' && <Icon.ArrowUp className="arrow" />}
@@ -1722,7 +1731,7 @@ function RouteView({ location, marine, windUnit }) {
       marker.addTo(group);
     });
     if (waypoints.length > 1) {
-      L.polyline(waypoints.map((w) => [w.lat, w.lon]), { color: '#20241E', weight: 2.5, dashArray: '6 5' }).addTo(group);
+      L.polyline(waypoints.map((w) => [w.lat, w.lon]), { color: '#211A0F', weight: 2.5, dashArray: '6 5' }).addTo(group);
     }
     group.addTo(leafletRef.current);
     layerRef.current = group;

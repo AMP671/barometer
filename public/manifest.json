@@ -4,8 +4,8 @@
   "description": "Pressure, wind, and isobar tracking",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#EDE3CE",
-  "theme_color": "#1F4B4C",
+  "background_color": "#D99A44",
+  "theme_color": "#211A0F",
   "orientation": "portrait",
   "icons": [
     { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
