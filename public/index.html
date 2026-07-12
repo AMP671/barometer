@@ -1364,20 +1364,44 @@ function CoastDirectionSheet({ location, onSelect, onClose }) {
 --------------------------------------------------------------------- */
 function ForecastSection({ weather, marine, windUnit, seaward }) {
   const [dayIdx, setDayIdx] = useState(0);
-  const daily = weather && weather.daily;
-  if (!daily || !Array.isArray(daily.time) || daily.time.length === 0) return null;
+  const rawDaily = weather && weather.daily;
+  if (!rawDaily || !Array.isArray(rawDaily.time) || rawDaily.time.length === 0) return null;
 
+  // past_days=1 (set for the hourly trend chart's backward history) also
+  // shifts the daily arrays, so daily.time[0] is yesterday, not today —
+  // slice every daily field to actually start from today, rather than
+  // assuming index 0. This was the root cause of a crash when switching
+  // to a new location: an unguarded null at the misaligned boundary day.
+  const todayStr = new Date().toISOString().slice(0, 10);
+  let offset = rawDaily.time.indexOf(todayStr);
+  if (offset === -1) offset = 0;
+  function sliceFromToday(d) {
+    if (!d) return d;
+    const out = {};
+    for (const key of Object.keys(d)) {
+      out[key] = Array.isArray(d[key]) ? d[key].slice(offset) : d[key];
+    }
+    return out;
+  }
+  const daily = sliceFromToday(rawDaily);
+  const mdaily = marine && marine.daily ? sliceFromToday(marine.daily) : null;
+
+  if (daily.time.length === 0) return null;
   const days = daily.time.map((t) => new Date(t + 'T12:00:00'));
   const i = Math.min(dayIdx, days.length - 1);
 
-  const windKn = daily.wind_speed_10m_max ? daily.wind_speed_10m_max[i] : null;
+  const windKn = daily.wind_speed_10m_max && daily.wind_speed_10m_max[i] != null ? daily.wind_speed_10m_max[i] : null;
   const windDisplay = windKn != null ? (windUnit === 'mph' ? Math.round(windKn * KN_TO_MPH) : Math.round(windKn)) : null;
-  const windDir = daily.wind_direction_10m_dominant ? daily.wind_direction_10m_dominant[i] : null;
+  const windDir = daily.wind_direction_10m_dominant && daily.wind_direction_10m_dominant[i] != null ? daily.wind_direction_10m_dominant[i] : null;
   const bf = windKn != null ? beaufort(windKn) : null;
   const shore = seaward != null && windDir != null ? classifyShoreWind(windDir, seaward) : null;
+  const tempMin = daily.temperature_2m_min && daily.temperature_2m_min[i] != null ? daily.temperature_2m_min[i] : null;
+  const tempMax = daily.temperature_2m_max && daily.temperature_2m_max[i] != null ? daily.temperature_2m_max[i] : null;
+  const uvMax = daily.uv_index_max && daily.uv_index_max[i] != null ? daily.uv_index_max[i] : null;
 
-  const mdaily = marine && marine.daily;
   const hasWave = mdaily && Array.isArray(mdaily.wave_height_max) && mdaily.wave_height_max[i] != null;
+  const waveHeight = hasWave ? mdaily.wave_height_max[i] : null;
+  const swellHeight = mdaily && mdaily.swell_wave_height_max && mdaily.swell_wave_height_max[i] != null ? mdaily.swell_wave_height_max[i] : null;
 
   return (
     <div className="card">
@@ -1387,12 +1411,12 @@ function ForecastSection({ weather, marine, windUnit, seaward }) {
         <div className="stat">
           <span className="label">TEMP</span>
           <span className="value mono">
-            {daily.temperature_2m_min ? daily.temperature_2m_min[i].toFixed(0) : '—'}–{daily.temperature_2m_max ? daily.temperature_2m_max[i].toFixed(0) : '—'}°C
+            {tempMin != null ? tempMin.toFixed(0) : '—'}–{tempMax != null ? tempMax.toFixed(0) : '—'}°C
           </span>
         </div>
         <div className="stat">
           <span className="label">UV MAX</span>
-          <span className="value mono">{daily.uv_index_max && daily.uv_index_max[i] != null ? daily.uv_index_max[i].toFixed(1) : '—'}</span>
+          <span className="value mono">{uvMax != null ? uvMax.toFixed(1) : '—'}</span>
         </div>
         <div className="stat">
           <span className="label">WIND (MAX)</span>
@@ -1406,11 +1430,11 @@ function ForecastSection({ weather, marine, windUnit, seaward }) {
           <React.Fragment>
             <div className="stat">
               <span className="label">WAVE (MAX)</span>
-              <span className="value mono">{mdaily.wave_height_max[i].toFixed(1)} m</span>
+              <span className="value mono">{waveHeight.toFixed(1)} m</span>
             </div>
             <div className="stat">
               <span className="label">SWELL (MAX)</span>
-              <span className="value mono">{mdaily.swell_wave_height_max && mdaily.swell_wave_height_max[i] != null ? mdaily.swell_wave_height_max[i].toFixed(1) + ' m' : '—'}</span>
+              <span className="value mono">{swellHeight != null ? swellHeight.toFixed(1) + ' m' : '—'}</span>
             </div>
           </React.Fragment>
         )}
@@ -1981,7 +2005,46 @@ function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+/* ---------------------------------------------------------------------
+   Error boundary — a render crash anywhere used to blank the entire
+   screen with no way back short of force-quitting Safari. This catches
+   it and offers a reload instead.
+--------------------------------------------------------------------- */
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{
+          minHeight: '100vh', display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center', gap: 14, padding: 28,
+          textAlign: 'center', background: 'var(--panel)', color: 'var(--ink)',
+        }}>
+          <Icon.Alert />
+          <div style={{ fontSize: 16, fontWeight: 600 }}>Something went wrong loading this screen.</div>
+          <div className="mono" style={{ fontSize: 12, color: 'var(--ink-soft)', maxWidth: 320 }}>
+            {String((this.state.error && this.state.error.message) || this.state.error)}
+          </div>
+          <button
+            onClick={() => window.location.reload()}
+            style={{ background: 'var(--case)', color: 'var(--panel-raised)', padding: '11px 22px', borderRadius: 10, fontWeight: 600, fontSize: 14 }}
+          >
+            Reload
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<ErrorBoundary><App /></ErrorBoundary>);
 </script>
 </body>
 </html>
