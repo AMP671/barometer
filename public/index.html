@@ -742,6 +742,52 @@ function initialBearing(lat1, lon1, lat2, lon2) {
   return (toDeg(Math.atan2(y, x)) + 360) % 360;
 }
 
+// --- Official UK/Ireland tide predictions (Admiralty / UKHO) --------------
+// Proxied through our own backend, which holds the subscription key.
+async function fetchTideStations() {
+  const r = await fetch('/api/tide-stations');
+  if (!r.ok) throw new Error('tide station fetch failed');
+  return r.json();
+}
+async function fetchTideEvents(stationId) {
+  const r = await fetch(`/api/tide-events/${encodeURIComponent(stationId)}`);
+  if (!r.ok) throw new Error('tide events fetch failed');
+  return r.json();
+}
+
+// The Stations endpoint's exact wrapper shape isn't fully pinned down from
+// docs alone, so this accepts either a bare array of GeoJSON Features or a
+// FeatureCollection.
+function parseStationList(data) {
+  const features = Array.isArray(data) ? data : (data && Array.isArray(data.features)) ? data.features : [];
+  return features
+    .map((f) => ({
+      id: f.properties && f.properties.Id,
+      name: f.properties && f.properties.Name,
+      lon: f.geometry && f.geometry.coordinates && f.geometry.coordinates[0],
+      lat: f.geometry && f.geometry.coordinates && f.geometry.coordinates[1],
+    }))
+    .filter((s) => s.id && typeof s.lat === 'number' && typeof s.lon === 'number');
+}
+
+function nearestStation(stations, lat, lon, maxKm) {
+  let best = null, bestDist = Infinity;
+  for (const s of stations) {
+    const d = haversineKm(lat, lon, s.lat, s.lon);
+    if (d < bestDist) { bestDist = d; best = s; }
+  }
+  return best && bestDist <= maxKm ? { ...best, distanceKm: bestDist } : null;
+}
+
+// Admiralty's TidalEvents always returns GMT with no timezone suffix, even
+// in summer (confirmed in their FAQ: "Is British Summer Time applied to
+// predictions? No.") — force UTC parsing so it converts to the viewer's
+// real local time correctly year-round instead of being read as a naive
+// local timestamp and landing an hour off during BST.
+function parseAdmiraltyTime(dateTimeStr) {
+  return new Date(dateTimeStr.endsWith('Z') ? dateTimeStr : dateTimeStr + 'Z');
+}
+
 // Builds a coarse lat/lon grid around a center point, synoptic-scale
 // (roughly continent-wide) so isobar curvature is actually visible.
 function buildGrid(centerLat, centerLon) {
@@ -1043,7 +1089,93 @@ function LocationSheet({ state, setState, onClose }) {
 /* ---------------------------------------------------------------------
    Gauge view
 --------------------------------------------------------------------- */
-function GaugeView({ weather, marine, windUnit }) {
+/* ---------------------------------------------------------------------
+   Tide section — official Admiralty/UKHO data for UK & Ireland where a
+   station is close enough to trust, modeled Open-Meteo curve everywhere
+   else. Nothing here is cached beyond the current session, per the
+   Discovery tier's terms.
+--------------------------------------------------------------------- */
+const TIDE_STATION_MAX_KM = 40;
+
+function TideSection({ location, tideStations, marine, currentTime }) {
+  const [events, setEvents] = useState(null);
+  const [loadError, setLoadError] = useState(false);
+
+  const station = useMemo(() => {
+    if (!location || !tideStations || tideStations.length === 0) return null;
+    return nearestStation(tideStations, location.lat, location.lon, TIDE_STATION_MAX_KM);
+  }, [location, tideStations]);
+
+  useEffect(() => {
+    if (!station) { setEvents(null); return; }
+    setLoadError(false);
+    fetchTideEvents(station.id).then(setEvents).catch(() => setLoadError(true));
+  }, [station]);
+
+  // Official data available and loaded — this takes priority.
+  if (station && events) {
+    const now = Date.now();
+    const upcoming = events
+      .filter((e) => parseAdmiraltyTime(e.DateTime).getTime() > now)
+      .slice(0, 3);
+    return (
+      <div className="card">
+        <div className="card-label">Tide — {station.name} (Official, UKHO)</div>
+        {upcoming.length === 0 ? (
+          <p className="empty-hint" style={{ padding: 0 }}>No upcoming events in range.</p>
+        ) : (
+          upcoming.map((e, i) => (
+            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderTop: i > 0 ? '1px solid var(--line)' : 'none' }}>
+              <span style={{ fontSize: 14 }}>{e.EventType === 'HighWater' ? 'High Water' : 'Low Water'}</span>
+              <span className="mono" style={{ fontSize: 14 }}>
+                {parseAdmiraltyTime(e.DateTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {e.Height.toFixed(1)} m
+              </span>
+            </div>
+          ))
+        )}
+        <div style={{ fontSize: 10, color: 'var(--ink-soft)', marginTop: 10, fontFamily: "'IBM Plex Mono', monospace" }}>
+          Contains ADMIRALTY® tidal data: © Crown copyright and database right
+        </div>
+      </div>
+    );
+  }
+
+  if (station && loadError) {
+    return <div className="empty-hint" style={{ margin: '0 18px 14px' }}>Couldn't load official tide data for {station.name} right now.</div>;
+  }
+
+  // Fallback: modeled sea-level curve from Open-Meteo, wherever there's no
+  // nearby Admiralty station (outside UK/Ireland, or no key configured).
+  const hasTide = marine && marine.hourly && Array.isArray(marine.hourly.sea_level_height_msl);
+  if (!hasTide) return null;
+
+  const tTimes = marine.hourly.time;
+  const tHeights = marine.hourly.sea_level_height_msl;
+  let tIdx = tTimes.indexOf(currentTime);
+  if (tIdx === -1) tIdx = Math.min(tTimes.length - 1, Math.floor(tTimes.length / 2));
+  const tideNow = tHeights[tIdx];
+  const tPrev = tHeights[Math.max(0, tIdx - 1)];
+  const tideTrend = tideNow > tPrev ? 'rising' : tideNow < tPrev ? 'falling' : 'steady';
+  const extrema = findTideExtrema(tTimes, tHeights);
+  const nextExtreme = extrema.find((e) => tTimes.indexOf(e.time) > tIdx) || null;
+  const tideStart = Math.max(0, tIdx - 12);
+  const tideHistory = tHeights.slice(tideStart, tIdx + 13);
+
+  return (
+    <div className="card">
+      <div className="card-label">Tide (modeled — not an official tide table)</div>
+      <Sparkline values={tideHistory} />
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 13, color: 'var(--ink-soft)' }}>
+        <span>{tideNow != null ? `${tideNow.toFixed(1)} m, ${tideTrend}` : '—'}</span>
+        <span>
+          {nextExtreme ? `Next ${nextExtreme.type}: ${new Date(nextExtreme.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function GaugeView({ weather, marine, windUnit, location, tideStations }) {
   if (!weather) {
     return <div className="view"><p className="empty-hint" style={{ padding: 24 }}>Loading conditions…</p></div>;
   }
@@ -1076,22 +1208,6 @@ function GaugeView({ weather, marine, windUnit }) {
   // conditional on actually having a number to show.
   const mcur = marine && marine.current;
   const hasWave = mcur && typeof mcur.wave_height === 'number';
-  const hasTide = marine && marine.hourly && Array.isArray(marine.hourly.sea_level_height_msl);
-
-  let tideNow = null, tideTrend = null, nextExtreme = null, tideHistory = null;
-  if (hasTide) {
-    const tTimes = marine.hourly.time;
-    const tHeights = marine.hourly.sea_level_height_msl;
-    let tIdx = tTimes.indexOf(cur.time);
-    if (tIdx === -1) tIdx = Math.min(tTimes.length - 1, Math.floor(tTimes.length / 2));
-    tideNow = tHeights[tIdx];
-    const tPrev = tHeights[Math.max(0, tIdx - 1)];
-    tideTrend = tideNow > tPrev ? 'rising' : tideNow < tPrev ? 'falling' : 'steady';
-    const extrema = findTideExtrema(tTimes, tHeights);
-    nextExtreme = extrema.find((e) => tTimes.indexOf(e.time) > tIdx) || null;
-    const tideStart = Math.max(0, tIdx - 12);
-    tideHistory = tHeights.slice(tideStart, tIdx + 13);
-  }
 
   return (
     <div className="view">
@@ -1196,18 +1312,7 @@ function GaugeView({ weather, marine, windUnit }) {
         </div>
       )}
 
-      {hasTide && (
-        <div className="card">
-          <div className="card-label">Tide (modeled — not an official tide table)</div>
-          <Sparkline values={tideHistory} />
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 13, color: 'var(--ink-soft)' }}>
-            <span>{tideNow != null ? `${tideNow.toFixed(1)} m, ${tideTrend}` : '—'}</span>
-            <span>
-              {nextExtreme ? `Next ${nextExtreme.type}: ${new Date(nextExtreme.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
-            </span>
-          </div>
-        </div>
-      )}
+      <TideSection location={location} tideStations={tideStations} marine={marine} currentTime={cur.time} />
     </div>
   );
 }
@@ -1592,11 +1697,20 @@ function App() {
   const [state, setState] = useState(null);
   const [weather, setWeather] = useState(null);
   const [marine, setMarine] = useState(null);
+  const [tideStations, setTideStations] = useState([]);
   const [tab, setTab] = useState('gauge');
   const [sheetOpen, setSheetOpen] = useState(false);
   const [lastFetchedAt, setLastFetchedAt] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [, setTick] = useState(0);
+
+  // Fetch the Admiralty station list once — it's metadata (names/locations),
+  // barely ever changes, and the backend caches it too. If no Admiralty key
+  // is configured server-side, this just fails quietly and every location
+  // falls back to the modeled tide curve.
+  useEffect(() => {
+    fetchTideStations().then((data) => setTideStations(parseStationList(data))).catch(() => {});
+  }, []);
 
   // Force-reload on new deploy
   useEffect(() => {
@@ -1692,7 +1806,7 @@ function App() {
         </div>
       )}
 
-      {tab === 'gauge' && <GaugeView weather={weather} marine={marine} windUnit={state.windUnit} />}
+      {tab === 'gauge' && <GaugeView weather={weather} marine={marine} windUnit={state.windUnit} location={activeLocation} tideStations={tideStations} />}
       {tab === 'map' && <MapView location={activeLocation} />}
       {tab === 'route' && <RouteView location={activeLocation} marine={marine} windUnit={state.windUnit} />}
       {tab === 'drift' && <DriftView />}

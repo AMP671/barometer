@@ -6,6 +6,7 @@ services:
     environment:
       PORT: 3000
       DATABASE_URL: postgres://barometer:${POSTGRES_PASSWORD}@barometer-db:5432/barometer
+      ADMIRALTY_API_KEY: ${ADMIRALTY_API_KEY}
       BUILD_ID: ${BUILD_ID:-dev}
     ports:
       # CHANGE 4300 to an unused port on Byte before first deploy —

@@ -4,6 +4,8 @@ const { Pool } = require('pg');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const ADMIRALTY_API_KEY = process.env.ADMIRALTY_API_KEY || '';
+const ADMIRALTY_BASE = 'https://admiraltyapi.azure-api.net/uktidalapi/api/V1';
 
 // Build/version id used by the frontend to force-reload after a deploy.
 // Set BUILD_ID in docker-compose for a stable value across restarts of the
@@ -74,6 +76,57 @@ app.put('/api/state', async (req, res) => {
   } catch (err) {
     console.error('PUT /api/state failed', err);
     res.status(500).json({ error: 'Could not save state' });
+  }
+});
+
+// Station list is metadata (names/coordinates), not tidal predictions, so
+// it's fine to cache briefly server-side — it barely ever changes and this
+// cuts down on repeated calls to the free tier's quota. Kept in memory only
+// (not Postgres), and re-fetched if the process restarts.
+let stationCache = null;
+let stationCacheAt = 0;
+const STATION_CACHE_MS = 24 * 60 * 60 * 1000;
+
+app.get('/api/tide-stations', async (req, res) => {
+  if (!ADMIRALTY_API_KEY) {
+    return res.status(503).json({ error: 'ADMIRALTY_API_KEY not configured on the server' });
+  }
+  if (stationCache && Date.now() - stationCacheAt < STATION_CACHE_MS) {
+    return res.json(stationCache);
+  }
+  try {
+    const upstream = await fetch(`${ADMIRALTY_BASE}/Stations`, {
+      headers: { 'Ocp-Apim-Subscription-Key': ADMIRALTY_API_KEY },
+    });
+    if (!upstream.ok) return res.status(upstream.status).json({ error: 'Admiralty station fetch failed' });
+    const data = await upstream.json();
+    stationCache = data;
+    stationCacheAt = Date.now();
+    res.json(data);
+  } catch (err) {
+    console.error('GET /api/tide-stations failed', err);
+    res.status(502).json({ error: 'Station fetch failed' });
+  }
+});
+
+// Tidal predictions themselves — the Discovery tier's terms prohibit
+// caching this data, so every request goes straight to Admiralty, fresh.
+app.get('/api/tide-events/:stationId', async (req, res) => {
+  if (!ADMIRALTY_API_KEY) {
+    return res.status(503).json({ error: 'ADMIRALTY_API_KEY not configured on the server' });
+  }
+  const { stationId } = req.params;
+  try {
+    const upstream = await fetch(`${ADMIRALTY_BASE}/Stations/${encodeURIComponent(stationId)}/TidalEvents`, {
+      headers: { 'Ocp-Apim-Subscription-Key': ADMIRALTY_API_KEY },
+    });
+    if (!upstream.ok) return res.status(upstream.status).json({ error: 'Admiralty tidal events fetch failed' });
+    const data = await upstream.json();
+    res.set('Cache-Control', 'no-store');
+    res.json(data);
+  } catch (err) {
+    console.error('GET /api/tide-events failed', err);
+    res.status(502).json({ error: 'Tidal events fetch failed' });
   }
 });
 
