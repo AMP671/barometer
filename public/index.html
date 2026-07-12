@@ -139,6 +139,13 @@
     transform: translateX(-50%);
     pointer-events: none;
   }
+  .pressure-readout {
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 6px;
+    margin-top: 6px;
+  }
   .trend-row {
     display: flex;
     align-items: center;
@@ -886,16 +893,14 @@ function gridToLatLng(gx, gy, grid) {
 }
 
 /* ---------------------------------------------------------------------
-   PressureGauge — analog dial + digital LCD readout merged into one
-   fascia, digits sitting in the dial's own lower gap rather than a
-   separate block. Needle length and LCD block size were checked against
-   each other with a quick mockup so the needle doesn't graze the digits
-   at the extreme ends of the scale.
+   PressureGaugeArc — open-arc analog gauge only (ticks, needle, hub).
+   Deliberately no bezel ring and no face fill — this is what makes the
+   trend chart underneath genuinely visible through the whole gauge,
+   not just peeking round the edges of an opaque disc.
 --------------------------------------------------------------------- */
-function PressureGauge({ pressure }) {
-  const size = 240;
-  const cx = size / 2, cy = size / 2;
-  const r = 100;
+function PressureGaugeArc({ pressure, width, height }) {
+  const cx = width / 2, cy = height * 0.5;
+  const r = height * 0.92;
   const min = 960, max = 1050;
   const startDeg = 135, endDeg = 405;
 
@@ -908,12 +913,18 @@ function PressureGauge({ pressure }) {
     return [cx + radius * Math.cos(rad), cy + radius * Math.sin(rad)];
   };
 
+  // Open arc rim traced as a stroked path — no fill, so nothing behind it
+  // is obscured. largeArcFlag=1 since this is a 270° sweep.
+  const [startX, startY] = polar(startDeg, r);
+  const [endX, endY] = polar(endDeg, r);
+  const rimPath = `M ${startX} ${startY} A ${r} ${r} 0 1 1 ${endX} ${endY}`;
+
   const majorTicks = [];
   for (let v = min; v <= max; v += 10) {
     const deg = toDeg(v);
-    const [x1, y1] = polar(deg, r - 4);
-    const [x2, y2] = polar(deg, r - 15);
-    const [lx, ly] = polar(deg, r - 28);
+    const [x1, y1] = polar(deg, r - 3);
+    const [x2, y2] = polar(deg, r - 14);
+    const [lx, ly] = polar(deg, r - 27);
     majorTicks.push(
       <g key={v}>
         <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="var(--ink)" strokeWidth="1.6" />
@@ -925,51 +936,22 @@ function PressureGauge({ pressure }) {
   for (let v = min; v <= max; v += 2) {
     if (v % 10 === 0) continue;
     const deg = toDeg(v);
-    const [x1, y1] = polar(deg, r - 4);
-    const [x2, y2] = polar(deg, r - 9);
+    const [x1, y1] = polar(deg, r - 3);
+    const [x2, y2] = polar(deg, r - 8);
     minorTicks.push(<line key={v} x1={x1} y1={y1} x2={x2} y2={y2} stroke="var(--ink-soft)" strokeWidth="1" opacity="0.6" />);
   }
 
-  // Shortened from r-20 to r-24 so the tip clears the LCD block below at
-  // the extreme ends of the scale (checked with a mockup).
   const needleDeg = pressure != null ? toDeg(pressure) : toDeg(1013);
-  const [nx, ny] = polar(needleDeg, r - 24);
+  const [nx, ny] = polar(needleDeg, r - 18);
 
   return (
-    <div style={{ position: 'relative', width: size, height: size }}>
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-        <defs>
-          <radialGradient id="bezel" cx="35%" cy="30%" r="75%">
-            <stop offset="0%" stopColor="#9BA69D" />
-            <stop offset="55%" stopColor="#6C7A70" />
-            <stop offset="100%" stopColor="#43504A" />
-          </radialGradient>
-        </defs>
-        <circle cx={cx} cy={cy} r={r + 13} fill="url(#bezel)" />
-        <circle cx={cx} cy={cy} r={r} fill="var(--panel-raised)" />
-        {minorTicks}
-        {majorTicks}
-        <line x1={cx} y1={cy} x2={nx} y2={ny} stroke="var(--storm)" strokeWidth="2.6" strokeLinecap="round" />
-        <circle cx={cx} cy={cy} r="6" fill="var(--case)" />
-      </svg>
-      <div
-        style={{
-          position: 'absolute',
-          left: '50%',
-          top: '76%',
-          transform: 'translate(-50%, -50%)',
-          background: 'var(--case)',
-          borderRadius: 8,
-          padding: '4px 8px',
-          display: 'flex',
-          alignItems: 'flex-end',
-          gap: 4,
-        }}
-      >
-        <SevenSegDisplay value={pressure != null ? pressure.toFixed(0) : '----'} size={22} />
-        <span style={{ fontSize: 10, color: 'var(--panel-raised)', opacity: 0.75, fontFamily: "'IBM Plex Mono', monospace", marginBottom: 2 }}>hPa</span>
-      </div>
-    </div>
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
+      <path d={rimPath} fill="none" stroke="var(--ink)" strokeWidth="2" strokeLinecap="round" />
+      {minorTicks}
+      {majorTicks}
+      <line x1={cx} y1={cy} x2={nx} y2={ny} stroke="var(--storm)" strokeWidth="2.6" strokeLinecap="round" />
+      <circle cx={cx} cy={cy} r="5" fill="var(--case)" />
+    </svg>
   );
 }
 
@@ -994,18 +976,16 @@ function Sparkline({ values }) {
 }
 
 /* ---------------------------------------------------------------------
-   TrendChart — the 24h pressure history, drawn as a layer that sits
-   behind the gauge (wider than the dial so its ends still peek out on
-   either side) and readable by touch: drag a finger across it to see
-   the value and time at that point, with min/max shown by default.
+   TrendChartCanvas — just the chart drawing + touch handling. Touch
+   state lives in the parent (GaugeView) now, so the big digital
+   readout can be placed between the gauge and the chart's own
+   max/min-or-touched-value caption, matching the reference layout.
 --------------------------------------------------------------------- */
-function TrendChart({ values, times, dialSize }) {
+function TrendChartCanvas({ values, height, touchIdx, onTouchIdx }) {
   const containerRef = useRef(null);
-  const [touchIdx, setTouchIdx] = useState(null);
+  if (!values || values.length < 2) return <div style={{ height }} />;
 
-  if (!values || values.length < 2) return <div style={{ height: dialSize }} />;
-
-  const w = 320, h = dialSize, pad = 12;
+  const w = 320, h = height, pad = 12;
   const min = Math.min(...values), max = Math.max(...values);
   const range = max - min || 1;
   const pts = values.map((v, i) => {
@@ -1021,35 +1001,27 @@ function TrendChart({ values, times, dialSize }) {
     const relX = ((clientX - rect.left) / rect.width) * w;
     let idx = Math.round(((relX - pad) / (w - pad * 2)) * (values.length - 1));
     idx = Math.max(0, Math.min(values.length - 1, idx));
-    setTouchIdx(idx);
+    onTouchIdx(idx);
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-      <div
-        ref={containerRef}
-        style={{ position: 'relative', width: '100%', maxWidth: w, height: h, touchAction: 'none' }}
-        onPointerDown={(e) => handlePointer(e.clientX)}
-        onPointerMove={(e) => { if (e.buttons === 1) handlePointer(e.clientX); }}
-        onPointerUp={() => setTouchIdx(null)}
-        onPointerLeave={() => setTouchIdx(null)}
-      >
-        <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: 'block' }}>
-          <polygon points={area} fill="var(--case)" opacity="0.07" />
-          <polyline points={line} fill="none" stroke="var(--case)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" opacity="0.55" />
-          {touchIdx != null && (
-            <React.Fragment>
-              <line x1={pts[touchIdx][0]} y1={pad} x2={pts[touchIdx][0]} y2={h - pad} stroke="var(--storm)" strokeWidth="1" strokeDasharray="3 2" />
-              <circle cx={pts[touchIdx][0]} cy={pts[touchIdx][1]} r="4" fill="var(--storm)" />
-            </React.Fragment>
-          )}
-        </svg>
-      </div>
-      <div className="mono" style={{ fontSize: 12, color: 'var(--ink-soft)', marginTop: 2, textAlign: 'center', minHeight: 16 }}>
-        {touchIdx != null
-          ? `${values[touchIdx].toFixed(1)} hPa${times && times[touchIdx] ? ' · ' + new Date(times[touchIdx]).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}`
-          : `Max ${max.toFixed(1)} · Min ${min.toFixed(1)} hPa — drag the chart for a reading`}
-      </div>
+    <div
+      ref={containerRef}
+      style={{ position: 'relative', width: '100%', maxWidth: w, height: h, margin: '0 auto', touchAction: 'none' }}
+      onPointerDown={(e) => handlePointer(e.clientX)}
+      onPointerMove={(e) => { if (e.buttons === 1) handlePointer(e.clientX); }}
+      onPointerUp={() => onTouchIdx(null)}
+      onPointerLeave={() => onTouchIdx(null)}
+    >
+      <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: 'block' }}>
+        <polyline points={line} fill="none" stroke="var(--case)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" opacity="0.7" />
+        {touchIdx != null && (
+          <React.Fragment>
+            <line x1={pts[touchIdx][0]} y1={pad} x2={pts[touchIdx][0]} y2={h - pad} stroke="var(--storm)" strokeWidth="1" strokeDasharray="3 2" />
+            <circle cx={pts[touchIdx][0]} cy={pts[touchIdx][1]} r="4" fill="var(--storm)" />
+          </React.Fragment>
+        )}
+      </svg>
     </div>
   );
 }
@@ -1440,6 +1412,7 @@ function ForecastSection({ weather, marine, windUnit, seaward }) {
 
 function GaugeView({ weather, marine, windUnit, location, tideStations, onUpdateLocation }) {
   const [coastSheetOpen, setCoastSheetOpen] = useState(false);
+  const [touchIdx, setTouchIdx] = useState(null);
   if (!weather) {
     return <div className="view"><p className="empty-hint" style={{ padding: 24 }}>Loading conditions…</p></div>;
   }
@@ -1478,10 +1451,19 @@ function GaugeView({ weather, marine, windUnit, location, tideStations, onUpdate
   return (
     <div className="view">
       <div className="gauge-composite">
-        <TrendChart values={historyValues} times={historyTimes} dialSize={240} />
+        <TrendChartCanvas values={historyValues} height={180} touchIdx={touchIdx} onTouchIdx={setTouchIdx} />
         <div className="gauge-overlay">
-          <PressureGauge pressure={cur.pressure_msl} />
+          <PressureGaugeArc pressure={cur.pressure_msl} width={260} height={180} />
         </div>
+      </div>
+      <div className="pressure-readout">
+        <SevenSegDisplay value={cur.pressure_msl.toFixed(0)} size={42} />
+        <span style={{ fontSize: 14, color: 'var(--ink-soft)', fontFamily: "'IBM Plex Mono', monospace", marginBottom: 3 }}>hPa</span>
+      </div>
+      <div className="mono" style={{ fontSize: 12, color: 'var(--ink-soft)', textAlign: 'center', marginTop: 4 }}>
+        {touchIdx != null
+          ? `${historyValues[touchIdx].toFixed(1)} hPa${historyTimes[touchIdx] ? ' · ' + new Date(historyTimes[touchIdx]).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}`
+          : `Max ${Math.max(...historyValues).toFixed(1)} · Min ${Math.min(...historyValues).toFixed(1)} hPa — drag the chart for a reading`}
       </div>
       <div className={`trend-row ${trend.dir === 'down' ? 'falling' : ''}`}>
         {trend.dir === 'up' && <Icon.ArrowUp className="arrow" />}
