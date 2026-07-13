@@ -75,7 +75,7 @@
   .app-header {
     background: var(--case);
     color: var(--panel-raised);
-    padding: calc(env(safe-area-inset-top, 0px) + 14px) 18px 10px;
+    padding: calc(env(safe-area-inset-top, 0px) + 14px) 14px 8px;
     flex-shrink: 0;
   }
   .header-row {
@@ -112,7 +112,7 @@
   .storm-banner {
     background: var(--storm);
     color: var(--panel-raised);
-    padding: 10px 18px;
+    padding: 8px 14px;
     font-size: 14px;
     font-weight: 500;
     display: flex;
@@ -132,15 +132,16 @@
   /* ---------- Merged gauge + trend chart ---------- */
   .gauge-composite {
     position: relative;
-    padding: 22px 18px 0;
+    padding: 16px 0 0;
     display: flex;
     justify-content: center;
   }
   .gauge-overlay {
     position: absolute;
-    top: 22px;
-    left: 50%;
-    transform: translateX(-50%);
+    top: 16px;
+    left: 0;
+    right: 0;
+    width: 100%;
     pointer-events: none;
   }
   .pressure-readout {
@@ -175,8 +176,8 @@
   .card {
     background: var(--panel-raised);
     border-radius: 14px;
-    margin: 14px 18px;
-    padding: 16px 18px;
+    margin: 10px 14px;
+    padding: 12px 14px;
     border: 1px solid var(--line);
   }
   .card-label {
@@ -190,7 +191,7 @@
 
   /* ---------- Collapsible sections ---------- */
   .section {
-    margin: 14px 18px;
+    margin: 10px 14px;
     border: 1px solid var(--line);
     border-radius: 14px;
     background: var(--panel-raised);
@@ -201,7 +202,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 15px 18px;
+    padding: 12px 14px;
     font-size: 14px;
     font-weight: 600;
     font-family: 'Space Grotesk', sans-serif;
@@ -209,7 +210,7 @@
   .section-head .chev { transition: transform 0.2s ease; color: var(--ink-soft); }
   .section-head[aria-expanded="true"] .chev { transform: rotate(180deg); }
   .section-body {
-    padding: 4px 18px 18px;
+    padding: 4px 14px 14px;
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 14px;
@@ -298,7 +299,7 @@
     background: var(--panel);
     border-top: 1px solid var(--line);
     border-radius: 16px 16px 0 0;
-    padding: 12px 16px 14px;
+    padding: 10px 14px 12px;
     display: flex;
     flex-direction: column;
     z-index: 900;
@@ -421,7 +422,7 @@
     width: 100%;
     max-height: 82vh;
     border-radius: 18px 18px 0 0;
-    padding: 10px 18px calc(env(safe-area-inset-bottom, 0px) + 20px);
+    padding: 8px 14px calc(env(safe-area-inset-bottom, 0px) + 20px);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -837,7 +838,10 @@ function buildShareImage(entry) {
         const windDirStr = w.windDir != null ? ` ${compassLabel(w.windDir)}` : '';
         const parts = [`${w.pressure.toFixed(0)} hPa`, `${w.temp.toFixed(0)}°C`, `${Math.round(w.windSpeed)} ${w.windUnit === 'mph' ? 'mph' : 'kn'}${windDirStr} wind`];
         if (w.shore) parts.push(w.shore);
+        if (w.waterTemp != null) parts.push(`water ${w.waterTemp.toFixed(0)}°C`);
         if (w.waveHeight != null) parts.push(`${w.waveHeight.toFixed(1)}m waves`);
+        if (w.swellHeight != null) parts.push(`${w.swellHeight.toFixed(1)}m swell`);
+        if (w.tideHeight != null) parts.push(`tide ${w.tideHeight.toFixed(1)}m${w.tideTrend ? `, ${w.tideTrend}` : ''}`);
         ctx.fillStyle = '#211A0F';
         ctx.font = '600 30px monospace';
         top = wrapCanvasText(ctx, parts.join('   ·   '), 56, top, W - 112, 40) + 12;
@@ -1145,7 +1149,7 @@ function PressureGaugeArc({ pressure, width, height }) {
   const [nx, ny] = polar(needleDeg, r - 18);
 
   return (
-    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
+    <svg width="100%" viewBox={`0 0 ${width} ${height}`} style={{ display: 'block' }}>
       <path d={rimPath} fill="none" stroke="var(--ink)" strokeWidth={2 * scale} strokeLinecap="round" />
       {minorTicks}
       {majorTicks}
@@ -1194,7 +1198,6 @@ function TrendChartCanvas({ values, height, touchIdx, onTouchIdx }) {
     return [x, y];
   });
   const line = pts.map((p) => p.join(',')).join(' ');
-  const area = `${pad},${h - pad} ` + line + ` ${w - pad},${h - pad}`;
 
   function handlePointer(clientX) {
     const rect = containerRef.current.getBoundingClientRect();
@@ -1207,14 +1210,14 @@ function TrendChartCanvas({ values, height, touchIdx, onTouchIdx }) {
   return (
     <div
       ref={containerRef}
-      style={{ position: 'relative', width: '100%', maxWidth: w, height: h, margin: '0 auto', touchAction: 'none' }}
+      style={{ position: 'relative', width: '100%', height: h, touchAction: 'none' }}
       onPointerDown={(e) => handlePointer(e.clientX)}
       onPointerMove={(e) => { if (e.buttons === 1) handlePointer(e.clientX); }}
       onPointerUp={() => onTouchIdx(null)}
       onPointerLeave={() => onTouchIdx(null)}
     >
       <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: 'block' }}>
-        <polyline points={line} fill="none" stroke="var(--case)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" opacity="0.7" />
+        <polyline points={line} fill="none" stroke="var(--case)" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" opacity="0.55" />
         {touchIdx != null && (
           <React.Fragment>
             <line x1={pts[touchIdx][0]} y1={pad} x2={pts[touchIdx][0]} y2={h - pad} stroke="var(--ink)" strokeWidth="1" strokeDasharray="3 2" />
@@ -1226,17 +1229,17 @@ function TrendChartCanvas({ values, height, touchIdx, onTouchIdx }) {
   );
 }
 
-function WindCompass({ deg }) {
-  const size = 50, cx = size / 2, cy = size / 2, r = 20;
+function WindCompass({ deg, size = 50 }) {
+  const cx = size / 2, cy = size / 2, r = size * 0.4;
   const rad = ((deg + 180) * Math.PI) / 180;
   const tipX = cx + r * Math.sin(rad), tipY = cy - r * Math.cos(rad);
   const tailX = cx - r * 0.6 * Math.sin(rad), tailY = cy + r * 0.6 * Math.cos(rad);
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ flexShrink: 0 }}>
       <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--line)" strokeWidth="1.5" />
-      <text x={cx} y="9" fontSize="7" textAnchor="middle" fill="var(--ink-soft)">N</text>
+      <text x={cx} y={size * 0.18} fontSize={size * 0.14} textAnchor="middle" fill="var(--ink-soft)">N</text>
       <line x1={tailX} y1={tailY} x2={tipX} y2={tipY} stroke="var(--ink)" strokeWidth="2.4" strokeLinecap="round" />
-      <circle cx={tipX} cy={tipY} r="2.3" fill="var(--ink)" />
+      <circle cx={tipX} cy={tipY} r={size * 0.046} fill="var(--ink)" />
     </svg>
   );
 }
@@ -1471,7 +1474,7 @@ function TideSection({ location, tideStations, marine, currentTime }) {
 
   if (station && loadError) {
     return (
-      <div className="empty-hint" style={{ margin: '0 18px 14px' }}>
+      <div className="empty-hint" style={{ margin: '0 14px 10px' }}>
         Couldn't load official tide data for {station.name} ({station.distanceKm.toFixed(0)} km away) right now — this can happen if a specific station has limited source data at Admiralty's end, not necessarily a connection problem.
       </div>
     );
@@ -1488,7 +1491,7 @@ function TideSection({ location, tideStations, marine, currentTime }) {
       : null;
 
   if (!hasTide) {
-    return diagnostic ? <div className="empty-hint" style={{ margin: '0 18px 14px' }}>{diagnostic}</div> : null;
+    return diagnostic ? <div className="empty-hint" style={{ margin: '0 14px 10px' }}>{diagnostic}</div> : null;
   }
 
   const tTimes = marine.hourly.time;
@@ -1700,9 +1703,9 @@ function GaugeView({ weather, marine, windUnit, location, tideStations, onUpdate
   return (
     <div className="view">
       <div className="gauge-composite">
-        <TrendChartCanvas values={historyValues} height={216} touchIdx={touchIdx} onTouchIdx={setTouchIdx} />
+        <TrendChartCanvas values={historyValues} height={210} touchIdx={touchIdx} onTouchIdx={setTouchIdx} />
         <div className="gauge-overlay">
-          <PressureGaugeArc pressure={cur.pressure_msl} width={312} height={216} />
+          <PressureGaugeArc pressure={cur.pressure_msl} width={350} height={210} />
         </div>
       </div>
       <div className="pressure-readout">
@@ -1806,7 +1809,7 @@ function GaugeView({ weather, marine, windUnit, location, tideStations, onUpdate
           </div>
         </Section>
       ) : (
-        <div className="empty-hint" style={{ margin: '0 18px 14px' }}>
+        <div className="empty-hint" style={{ margin: '0 14px 10px' }}>
           No sea/wave data at this location — marine forecasts only cover coastal and open water, not inland lakes or rivers.
         </div>
       )}
@@ -2104,6 +2107,23 @@ function LogEntryForm({ weather, marine, location, windUnit, onClose, onSaved })
     const cur = weather.current;
     const mcur = marine && marine.current;
     const shore = location && location.seaward != null ? classifyShoreWind(cur.wind_direction_10m, location.seaward) : null;
+
+    // Modeled tide reading at the current moment — same approach as the
+    // Tide card's own fallback, since a log entry doesn't need to trigger
+    // a separate official-station lookup just to capture a snapshot.
+    let tideHeight = null, tideTrend = null;
+    if (marine && marine.hourly && Array.isArray(marine.hourly.sea_level_height_msl)) {
+      const tTimes = marine.hourly.time;
+      const tHeights = marine.hourly.sea_level_height_msl;
+      let tIdx = tTimes.indexOf(cur.time);
+      if (tIdx === -1) tIdx = Math.min(tTimes.length - 1, Math.floor(tTimes.length / 2));
+      if (tHeights[tIdx] != null) {
+        tideHeight = tHeights[tIdx];
+        const tPrev = tHeights[Math.max(0, tIdx - 1)];
+        tideTrend = tPrev != null ? (tideHeight > tPrev ? 'rising' : tideHeight < tPrev ? 'falling' : 'steady') : null;
+      }
+    }
+
     return {
       pressure: cur.pressure_msl,
       temp: cur.temperature_2m,
@@ -2112,7 +2132,11 @@ function LogEntryForm({ weather, marine, location, windUnit, onClose, onSaved })
       windUnit,
       shore,
       waveHeight: mcur && typeof mcur.wave_height === 'number' ? mcur.wave_height : null,
+      swellHeight: mcur && typeof mcur.swell_wave_height === 'number' ? mcur.swell_wave_height : null,
+      swellDir: mcur && typeof mcur.swell_wave_direction === 'number' ? mcur.swell_wave_direction : null,
       waterTemp: mcur && typeof mcur.sea_surface_temperature === 'number' ? mcur.sea_surface_temperature : null,
+      tideHeight,
+      tideTrend,
     };
   }
 
@@ -2156,9 +2180,28 @@ function LogEntryForm({ weather, marine, location, windUnit, onClose, onSaved })
             <div className="section-body" style={{ paddingLeft: 0, paddingRight: 0, paddingTop: 4 }}>
               <div className="stat"><span className="label">PRESSURE</span><span className="value mono">{snap.pressure.toFixed(0)} hPa</span></div>
               <div className="stat"><span className="label">TEMP</span><span className="value mono">{snap.temp.toFixed(0)}°C</span></div>
-              <div className="stat"><span className="label">WIND</span><span className="value mono">{Math.round(snap.windSpeed)} {windUnit === 'mph' ? 'MPH' : 'KN'} {compassLabel(snap.windDir)}</span></div>
+              {snap.waterTemp != null && <div className="stat"><span className="label">WATER TEMP</span><span className="value mono">{snap.waterTemp.toFixed(0)}°C</span></div>}
               {snap.shore && <div className="stat"><span className="label">SHORE</span><span className="value">{snap.shore}</span></div>}
               {snap.waveHeight != null && <div className="stat"><span className="label">WAVE</span><span className="value mono">{snap.waveHeight.toFixed(1)} m</span></div>}
+              {snap.swellHeight != null && (
+                <div className="stat">
+                  <span className="label">SWELL</span>
+                  <span className="value mono">{snap.swellHeight.toFixed(1)} m{snap.swellDir != null ? ` ${compassLabel(snap.swellDir)}` : ''}</span>
+                </div>
+              )}
+              {snap.tideHeight != null && (
+                <div className="stat">
+                  <span className="label">TIDE (MODELED)</span>
+                  <span className="value mono">{snap.tideHeight.toFixed(1)} m{snap.tideTrend ? `, ${snap.tideTrend}` : ''}</span>
+                </div>
+              )}
+              <div className="wind-block" style={{ gridColumn: '1 / -1' }}>
+                <WindCompass deg={snap.windDir} size={44} />
+                <div className="stat">
+                  <span className="label">WIND, FROM {compassLabel(snap.windDir)}</span>
+                  <span className="value mono">{Math.round(snap.windSpeed)} {windUnit === 'mph' ? 'MPH' : 'KN'}</span>
+                </div>
+              </div>
             </div>
           ) : (
             <p className="empty-hint" style={{ padding: 0 }}>Weather hasn't loaded yet — this entry will save without a conditions snapshot.</p>
@@ -2227,9 +2270,18 @@ function LogEntryCard({ entry, onDelete }) {
           <button className="icon-btn" onClick={onDelete} aria-label="Delete entry"><Icon.Trash /></button>
         </div>
         {entry.weather && (
-          <div className="mono" style={{ fontSize: 11, color: 'var(--ink-soft)', marginTop: 4 }}>
-            {entry.weather.pressure.toFixed(0)} hPa · {entry.weather.temp.toFixed(0)}°C · {Math.round(entry.weather.windSpeed)} {entry.weather.windUnit === 'mph' ? 'MPH' : 'KN'} {entry.weather.windDir != null ? compassLabel(entry.weather.windDir) : ''}{entry.weather.shore ? ` (${entry.weather.shore})` : ''}
-            {entry.weather.waveHeight != null ? ` · ${entry.weather.waveHeight.toFixed(1)}m waves` : ''}
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 6 }}>
+            {entry.weather.windDir != null && <WindCompass deg={entry.weather.windDir} size={30} />}
+            <div className="mono" style={{ fontSize: 11, color: 'var(--ink-soft)', lineHeight: 1.5 }}>
+              {entry.weather.pressure.toFixed(0)} hPa · {entry.weather.temp.toFixed(0)}°C
+              {entry.weather.waterTemp != null ? ` · water ${entry.weather.waterTemp.toFixed(0)}°C` : ''}
+              <br />
+              {Math.round(entry.weather.windSpeed)} {entry.weather.windUnit === 'mph' ? 'MPH' : 'KN'} {entry.weather.windDir != null ? compassLabel(entry.weather.windDir) : ''}{entry.weather.shore ? ` (${entry.weather.shore})` : ''}
+              {entry.weather.waveHeight != null ? ` · ${entry.weather.waveHeight.toFixed(1)}m waves` : ''}
+              {entry.weather.swellHeight != null ? ` · ${entry.weather.swellHeight.toFixed(1)}m swell` : ''}
+              {entry.weather.tideHeight != null ? <br /> : ''}
+              {entry.weather.tideHeight != null ? `Tide ${entry.weather.tideHeight.toFixed(1)}m${entry.weather.tideTrend ? `, ${entry.weather.tideTrend}` : ''} (modeled)` : ''}
+            </div>
           </div>
         )}
         {entry.comment && <div style={{ fontSize: 13, marginTop: 6 }}>{entry.comment}</div>}
@@ -2266,7 +2318,7 @@ function LogView({ weather, marine, location, windUnit }) {
 
   return (
     <div className="view">
-      <div style={{ padding: '18px 18px 4px' }}>
+      <div style={{ padding: '14px 14px 4px' }}>
         <button className="watch-btn" style={{ width: '100%' }} onClick={() => setFormOpen(true)}>+ New Log Entry</button>
       </div>
       {loading ? (
@@ -2274,7 +2326,7 @@ function LogView({ weather, marine, location, windUnit }) {
       ) : entries.length === 0 ? (
         <p className="empty-hint" style={{ padding: 24 }}>No entries yet — log a trip once you're back.</p>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '10px 18px 24px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '10px 14px 14px' }}>
           {entries.map((e) => (
             <LogEntryCard key={e.id} entry={e} onDelete={() => removeEntry(e.id)} />
           ))}
