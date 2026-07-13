@@ -46,7 +46,10 @@ async function setState(state) {
   );
 }
 
-app.use(express.json());
+// Default 100kb JSON body limit is far too small for a log entry with a
+// compressed photo attached — the frontend downsizes images before
+// sending, but still needs headroom beyond the default.
+app.use(express.json({ limit: '8mb' }));
 app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
 
 // --- API ------------------------------------------------------------------
@@ -127,6 +130,55 @@ app.get('/api/tide-events/:stationId', async (req, res) => {
   } catch (err) {
     console.error('GET /api/tide-events failed', err);
     res.status(502).json({ error: 'Tidal events fetch failed' });
+  }
+});
+
+// --- Voyage log -------------------------------------------------------
+// Each entry is its own kv_store row (key: log:<id>) rather than one
+// array in a single row, so entries can be added/removed independently.
+
+app.get('/api/log-entries', async (req, res) => {
+  try {
+    const { rows } = await pool.query("SELECT key, value FROM kv_store WHERE key LIKE 'log:%'");
+    const entries = rows
+      .map((r) => { try { return JSON.parse(r.value); } catch { return null; } })
+      .filter(Boolean)
+      .sort((a, b) => new Date(b.date) - new Date(a.date));
+    res.json(entries);
+  } catch (err) {
+    console.error('GET /api/log-entries failed', err);
+    res.status(500).json({ error: 'Could not load log entries' });
+  }
+});
+
+app.post('/api/log-entries', async (req, res) => {
+  const entry = req.body;
+  if (!entry || !entry.date) {
+    return res.status(400).json({ error: 'Malformed log entry' });
+  }
+  const id = entry.id || `log_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const toSave = { ...entry, id };
+  try {
+    await pool.query(
+      `INSERT INTO kv_store (key, value, updated_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [`log:${id}`, JSON.stringify(toSave)]
+    );
+    res.json(toSave);
+  } catch (err) {
+    console.error('POST /api/log-entries failed', err);
+    res.status(500).json({ error: 'Could not save log entry' });
+  }
+});
+
+app.delete('/api/log-entries/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM kv_store WHERE key = $1', [`log:${req.params.id}`]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('DELETE /api/log-entries failed', err);
+    res.status(500).json({ error: 'Could not delete log entry' });
   }
 });
 
