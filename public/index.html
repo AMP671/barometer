@@ -482,6 +482,20 @@
   .fav-main .sub, .result-main .sub { font-size: 12px; color: var(--ink-soft); font-family: 'IBM Plex Mono', monospace; }
   .fav-row.active .name { color: var(--accent); }
   .icon-btn { padding: 6px; color: var(--ink-soft); }
+  .temp-banner {
+    background: var(--panel-raised);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 12px;
+    margin-bottom: 12px;
+  }
+  .pin-toggle-btn {
+    font-size: 12px;
+    color: var(--accent);
+    font-weight: 600;
+    text-decoration: underline;
+    padding: 4px 0 10px;
+  }
   .unit-toggle {
     display: flex;
     border: 1px solid var(--line);
@@ -548,6 +562,16 @@ const Icon = {
   Trash: (p) => (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
       <polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6M14 11v6" />
+    </svg>
+  ),
+  Pencil: (p) => (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+    </svg>
+  ),
+  Check: (p) => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <polyline points="20 6 9 17 4 12" />
     </svg>
   ),
   Plus: (p) => (
@@ -872,6 +896,53 @@ async function geocode(query) {
   const r = await fetch(url);
   const data = await r.json();
   return data.results || [];
+}
+
+async function fetchPlaceSearch(query) {
+  const r = await fetch(`/api/geocode-places?q=${encodeURIComponent(query)}`);
+  if (!r.ok) return [];
+  return r.json();
+}
+
+// Both geocoders return different shapes — normalize to one consistent
+// {name, sub, lat, lon, source} form used everywhere else.
+function normalizeOpenMeteoResult(res) {
+  return {
+    name: res.name,
+    sub: [res.admin1, res.country].filter(Boolean).join(', '),
+    lat: res.latitude,
+    lon: res.longitude,
+    source: 'place',
+  };
+}
+function normalizeNominatimResult(res) {
+  const name = res.name || (res.display_name ? res.display_name.split(',')[0] : 'Unnamed');
+  const parts = res.display_name ? res.display_name.split(',').slice(1, 3).map((s) => s.trim()) : [];
+  return {
+    name,
+    sub: [res.type, ...parts].filter(Boolean).join(', '),
+    lat: parseFloat(res.lat),
+    lon: parseFloat(res.lon),
+    source: 'feature',
+  };
+}
+
+// Open-Meteo's geocoder covers cities/towns well but has no idea what a
+// beach or cove is — Nominatim (OpenStreetMap) fills that gap. Both run in
+// parallel and get merged, since the same place sometimes exists in both.
+async function searchAllPlaces(query) {
+  const [places, features] = await Promise.all([
+    geocode(query).then((r) => r.map(normalizeOpenMeteoResult)).catch(() => []),
+    fetchPlaceSearch(query).then((r) => r.map(normalizeNominatimResult)).catch(() => []),
+  ]);
+  const seen = new Set();
+  return [...places, ...features].filter((p) => {
+    if (typeof p.lat !== 'number' || typeof p.lon !== 'number' || Number.isNaN(p.lat) || Number.isNaN(p.lon)) return false;
+    const key = `${p.lat.toFixed(2)},${p.lon.toFixed(2)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 async function fetchWeather(lat, lon) {
   const params = new URLSearchParams({
@@ -1279,11 +1350,60 @@ function Section({ title, defaultOpen, children }) {
 /* ---------------------------------------------------------------------
    Location sheet
 --------------------------------------------------------------------- */
-function LocationSheet({ state, setState, onClose }) {
+function PinPicker({ initialLat, initialLon, onPick }) {
+  const mapRef = useRef(null);
+  const leafletRef = useRef(null);
+  const markerRef = useRef(null);
+  const [coords, setCoords] = useState(null);
+
+  useEffect(() => {
+    const map = L.map(mapRef.current, { zoomControl: true }).setView(
+      [initialLat || 51.5, initialLon || -0.12],
+      initialLat != null ? 11 : 5
+    );
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors',
+      maxZoom: 18,
+    }).addTo(map);
+    map.on('click', (e) => {
+      const { lat, lng } = e.latlng;
+      setCoords({ lat, lon: lng });
+      if (markerRef.current) map.removeLayer(markerRef.current);
+      markerRef.current = L.marker([lat, lng]).addTo(map);
+    });
+    leafletRef.current = map;
+    return () => { map.remove(); leafletRef.current = null; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div>
+      <div ref={mapRef} style={{ height: 200, borderRadius: 10, overflow: 'hidden' }} />
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, gap: 10 }}>
+        <span className="mono" style={{ fontSize: 12, color: 'var(--ink-soft)' }}>
+          {coords ? `${coords.lat.toFixed(4)}, ${coords.lon.toFixed(4)}` : 'Tap the map to drop a pin'}
+        </span>
+        <button className="watch-btn" style={{ padding: '9px 16px', flexShrink: 0 }} disabled={!coords} onClick={() => coords && onPick(coords)}>
+          Use this spot
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function LocationSheet({ favourites, activeFavouriteId, tempLocation, windUnit, onView, onSaveTemp, onSelectFavourite, onRenameFavourite, onRemoveFavourite, onSetWindUnit, onClose }) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
   const [searching, setSearching] = useState(false);
+  const [pinMode, setPinMode] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [editValue, setEditValue] = useState('');
+  const [saveNameValue, setSaveNameValue] = useState(tempLocation ? tempLocation.label : '');
   const debounceRef = useRef(null);
+
+  useEffect(() => {
+    setSaveNameValue(tempLocation ? tempLocation.label : '');
+  }, [tempLocation]);
 
   useEffect(() => {
     clearTimeout(debounceRef.current);
@@ -1291,8 +1411,7 @@ function LocationSheet({ state, setState, onClose }) {
     debounceRef.current = setTimeout(async () => {
       setSearching(true);
       try {
-        const r = await geocode(query.trim());
-        setResults(r);
+        setResults(await searchAllPlaces(query.trim()));
       } catch {
         setResults([]);
       } finally {
@@ -1302,36 +1421,24 @@ function LocationSheet({ state, setState, onClose }) {
     return () => clearTimeout(debounceRef.current);
   }, [query]);
 
-  function persist(next) {
-    setState(next);
-    saveState(next);
-  }
-
-  function selectFavorite(id) {
-    persist({ ...state, activeLocationId: id });
-    onClose();
-  }
-
-  function addResult(res) {
-    const id = `loc_${Date.now()}`;
-    const label = [res.name, res.admin1, res.country].filter(Boolean).slice(0, 2).join(', ');
-    const loc = { id, label, lat: res.latitude, lon: res.longitude, timezone: res.timezone || 'auto' };
-    const next = { ...state, locations: [...state.locations, loc], activeLocationId: id };
-    persist(next);
+  function handleResultTap(res) {
+    onView({ label: res.sub ? `${res.name}, ${res.sub}` : res.name, lat: res.lat, lon: res.lon, timezone: 'auto' });
     setQuery('');
     setResults([]);
-    onClose();
   }
 
-  function removeFavorite(id) {
-    if (state.locations.length <= 1) return;
-    const remaining = state.locations.filter((l) => l.id !== id);
-    const nextActive = state.activeLocationId === id ? remaining[0].id : state.activeLocationId;
-    persist({ ...state, locations: remaining, activeLocationId: nextActive });
+  function handlePin(coords) {
+    onView({ label: 'Dropped pin', lat: coords.lat, lon: coords.lon, timezone: 'auto' });
+    setPinMode(false);
   }
 
-  function setWindUnit(unit) {
-    persist({ ...state, windUnit: unit });
+  function startEdit(loc) {
+    setEditingId(loc.id);
+    setEditValue(loc.label);
+  }
+  function confirmEdit() {
+    onRenameFavourite(editingId, editValue);
+    setEditingId(null);
   }
 
   return ReactDOM.createPortal(
@@ -1342,46 +1449,96 @@ function LocationSheet({ state, setState, onClose }) {
           <h2>Locations</h2>
           <button className="icon-btn" onClick={onClose} aria-label="Close"><Icon.Close /></button>
         </div>
-        <div className="search-box">
-          <Icon.Search style={{ color: 'var(--ink-soft)' }} />
-          <input
-            placeholder="Search for a city"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-        </div>
+
+        {tempLocation && (
+          <div className="temp-banner">
+            <div className="card-label" style={{ margin: 0 }}>Viewing — not saved yet</div>
+            <input
+              className="log-input"
+              style={{ marginTop: 6 }}
+              value={saveNameValue}
+              onChange={(e) => setSaveNameValue(e.target.value)}
+              placeholder="Name this place"
+            />
+            <button className="watch-btn" style={{ width: '100%', marginTop: 8 }} onClick={() => { onSaveTemp(saveNameValue); onClose(); }}>
+              ★ Save to Favourites
+            </button>
+          </div>
+        )}
+
+        {!pinMode && (
+          <div className="search-box">
+            <Icon.Search style={{ color: 'var(--ink-soft)' }} />
+            <input
+              placeholder="Search for a city, beach, cove…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </div>
+        )}
+        <button className="pin-toggle-btn" onClick={() => setPinMode((p) => !p)}>
+          {pinMode ? '← Search instead' : 'Or drop a pin on the map'}
+        </button>
+
         <div className="sheet-scroll">
-          {results.length > 0 && (
-            <div style={{ marginBottom: 14 }}>
-              {results.map((res) => (
-                <div className="result-row" key={`${res.latitude}-${res.longitude}`}>
-                  <div className="result-main">
-                    <span className="name">{res.name}</span>
-                    <span className="sub">{[res.admin1, res.country].filter(Boolean).join(', ')}</span>
-                  </div>
-                  <button className="icon-btn" onClick={() => addResult(res)} aria-label="Add location"><Icon.Plus /></button>
+          {pinMode ? (
+            <PinPicker
+              initialLat={tempLocation ? tempLocation.lat : favourites[0] && favourites[0].lat}
+              initialLon={tempLocation ? tempLocation.lon : favourites[0] && favourites[0].lon}
+              onPick={handlePin}
+            />
+          ) : (
+            <React.Fragment>
+              {results.length > 0 && (
+                <div style={{ marginBottom: 14 }}>
+                  {results.map((res, i) => (
+                    <div className="result-row" key={i}>
+                      <button className="result-main" onClick={() => handleResultTap(res)}>
+                        <span className="name">{res.name}</span>
+                        <span className="sub">{res.sub}{res.source === 'feature' ? ' · map feature' : ''}</span>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {searching && <div className="empty-hint">Searching…</div>}
+
+              {favourites.map((loc) => (
+                <div className={`fav-row ${loc.id === activeFavouriteId && !tempLocation ? 'active' : ''}`} key={loc.id}>
+                  {editingId === loc.id ? (
+                    <React.Fragment>
+                      <input
+                        className="log-input"
+                        style={{ flex: 1, marginRight: 8 }}
+                        value={editValue}
+                        onChange={(e) => setEditValue(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') confirmEdit(); }}
+                        autoFocus
+                      />
+                      <button className="icon-btn" onClick={confirmEdit} aria-label="Confirm rename"><Icon.Check /></button>
+                    </React.Fragment>
+                  ) : (
+                    <React.Fragment>
+                      <button className="fav-main" onClick={() => { onSelectFavourite(loc.id); onClose(); }}>
+                        <span className="name">{loc.label}</span>
+                        <span className="sub">{loc.lat.toFixed(2)}, {loc.lon.toFixed(2)}</span>
+                      </button>
+                      <button className="icon-btn" onClick={() => startEdit(loc)} aria-label="Rename"><Icon.Pencil /></button>
+                      <button className="icon-btn" onClick={() => onRemoveFavourite(loc.id)} aria-label="Remove"><Icon.Trash /></button>
+                    </React.Fragment>
+                  )}
                 </div>
               ))}
-            </div>
-          )}
-          {searching && <div className="empty-hint">Searching…</div>}
-
-          {state.locations.map((loc) => (
-            <div className={`fav-row ${loc.id === state.activeLocationId ? 'active' : ''}`} key={loc.id}>
-              <button className="fav-main" onClick={() => selectFavorite(loc.id)}>
-                <span className="name">{loc.label}</span>
-                <span className="sub">{loc.lat.toFixed(2)}, {loc.lon.toFixed(2)}</span>
-              </button>
-              {state.locations.length > 1 && (
-                <button className="icon-btn" onClick={() => removeFavorite(loc.id)} aria-label="Remove"><Icon.Trash /></button>
+              {favourites.length === 0 && (
+                <p className="empty-hint" style={{ padding: '8px 0' }}>No saved favourites yet — search above, or drop a pin, then save it.</p>
               )}
-            </div>
-          ))}
+            </React.Fragment>
+          )}
 
           <div className="card-label" style={{ marginTop: 18 }}>Wind unit</div>
           <div className="unit-toggle">
-            <button className={state.windUnit === 'kn' ? 'active' : ''} onClick={() => setWindUnit('kn')}>Knots</button>
-            <button className={state.windUnit === 'mph' ? 'active' : ''} onClick={() => setWindUnit('mph')}>mph</button>
+            <button className={windUnit === 'kn' ? 'active' : ''} onClick={() => onSetWindUnit('kn')}>Knots</button>
+            <button className={windUnit === 'mph' ? 'active' : ''} onClick={() => onSetWindUnit('mph')}>mph</button>
           </div>
         </div>
       </div>
@@ -2391,12 +2548,19 @@ function App() {
     return () => clearInterval(id);
   }, []);
 
+  const [tempLocation, setTempLocation] = useState(null);
+
   const activeLocation = useMemo(() => {
+    if (tempLocation) return tempLocation;
     if (!state) return null;
     return state.locations.find((l) => l.id === state.activeLocationId) || state.locations[0] || null;
-  }, [state]);
+  }, [tempLocation, state]);
 
   function updateLocationField(locationId, patch) {
+    if (locationId === 'temp') {
+      setTempLocation((t) => (t ? { ...t, ...patch } : t));
+      return;
+    }
     if (!state) return;
     const next = {
       ...state,
@@ -2406,9 +2570,59 @@ function App() {
     saveState(next);
   }
 
-  function selectLocation(id) {
+  // Views a place without saving it as a favourite — from a search result
+  // or a dropped map pin. Session-only; a reload falls back to the last
+  // saved favourite, which is the intended behaviour for something not
+  // deliberately kept.
+  function viewLocation(loc) {
+    setTempLocation({ id: 'temp', timezone: 'auto', ...loc });
+  }
+
+  function saveTempAsFavourite(customLabel) {
+    if (!tempLocation || !state) return;
+    const id = `loc_${Date.now()}`;
+    const loc = {
+      id,
+      label: (customLabel || tempLocation.label || 'Unnamed').trim() || 'Unnamed',
+      lat: tempLocation.lat,
+      lon: tempLocation.lon,
+      timezone: tempLocation.timezone || 'auto',
+    };
+    const next = { ...state, locations: [...state.locations, loc], activeLocationId: id };
+    setState(next);
+    saveState(next);
+    setTempLocation(null);
+  }
+
+  function selectFavourite(id) {
     if (!state) return;
+    setTempLocation(null);
     const next = { ...state, activeLocationId: id };
+    setState(next);
+    saveState(next);
+  }
+
+  function renameFavourite(id, newLabel) {
+    if (!state) return;
+    const label = (newLabel || '').trim();
+    if (!label) return;
+    const next = { ...state, locations: state.locations.map((l) => (l.id === id ? { ...l, label } : l)) };
+    setState(next);
+    saveState(next);
+  }
+
+  function removeFavourite(id) {
+    if (!state) return;
+    const remaining = state.locations.filter((l) => l.id !== id);
+    const nextActive = state.activeLocationId === id ? (remaining[0] ? remaining[0].id : null) : state.activeLocationId;
+    const next = { ...state, locations: remaining, activeLocationId: nextActive };
+    setState(next);
+    saveState(next);
+  }
+
+  function setWindUnit(unit) {
+    if (!state) return;
+    const next = { ...state, windUnit: unit };
     setState(next);
     saveState(next);
   }
@@ -2472,13 +2686,13 @@ function App() {
           </button>
         </div>
         <div className="update-row">Last update: {relativeTime(lastFetchedAt)}</div>
-        {state.locations.length > 1 && (
+        {state.locations.length > 0 && (
           <div className="day-tabs" style={{ marginTop: 10 }}>
             {state.locations.map((loc) => (
               <button
                 key={loc.id}
-                className={`day-tab ${loc.id === state.activeLocationId ? 'active' : ''}`}
-                onClick={() => selectLocation(loc.id)}
+                className={`day-tab ${loc.id === state.activeLocationId && !tempLocation ? 'active' : ''}`}
+                onClick={() => selectFavourite(loc.id)}
               >
                 {loc.label.split(',')[0]}
               </button>
@@ -2516,7 +2730,19 @@ function App() {
       </nav>
 
       {sheetOpen && (
-        <LocationSheet state={state} setState={setState} onClose={() => setSheetOpen(false)} />
+        <LocationSheet
+          favourites={state.locations}
+          activeFavouriteId={state.activeLocationId}
+          tempLocation={tempLocation}
+          windUnit={state.windUnit}
+          onView={viewLocation}
+          onSaveTemp={saveTempAsFavourite}
+          onSelectFavourite={selectFavourite}
+          onRenameFavourite={renameFavourite}
+          onRemoveFavourite={removeFavourite}
+          onSetWindUnit={setWindUnit}
+          onClose={() => setSheetOpen(false)}
+        />
       )}
     </React.Fragment>
   );

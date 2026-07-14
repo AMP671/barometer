@@ -133,6 +133,28 @@ app.get('/api/tide-events/:stationId', async (req, res) => {
   }
 });
 
+// Places search beyond cities/towns — beaches, coves, bays, headlands, etc.
+// Open-Meteo's geocoder only covers populated places, not this level of
+// detail. Proxied through here (rather than called directly from the
+// browser) so we can set a proper identifying User-Agent, which
+// Nominatim's usage policy requires and a browser fetch() can't set itself.
+app.get('/api/geocode-places', async (req, res) => {
+  const q = req.query.q;
+  if (!q || typeof q !== 'string') return res.json([]);
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=jsonv2&limit=8&addressdetails=1`;
+    const upstream = await fetch(url, {
+      headers: { 'User-Agent': 'BarometerPWA/1.0 (personal-use weather app)' },
+    });
+    if (!upstream.ok) return res.status(upstream.status).json([]);
+    const data = await upstream.json();
+    res.json(Array.isArray(data) ? data : []);
+  } catch (err) {
+    console.error('GET /api/geocode-places failed', err);
+    res.status(502).json([]);
+  }
+});
+
 // --- Voyage log -------------------------------------------------------
 // Each entry is its own kv_store row (key: log:<id>) rather than one
 // array in a single row, so entries can be added/removed independently.
