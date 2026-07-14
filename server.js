@@ -155,6 +155,54 @@ app.get('/api/geocode-places', async (req, res) => {
   }
 });
 
+// --- Saved routes -------------------------------------------------------
+// Same one-row-per-item pattern as the voyage log.
+
+app.get('/api/routes', async (req, res) => {
+  try {
+    const { rows } = await pool.query("SELECT key, value FROM kv_store WHERE key LIKE 'route:%'");
+    const routes = rows
+      .map((r) => { try { return JSON.parse(r.value); } catch { return null; } })
+      .filter(Boolean)
+      .sort((a, b) => (b.savedAt || '').localeCompare(a.savedAt || ''));
+    res.json(routes);
+  } catch (err) {
+    console.error('GET /api/routes failed', err);
+    res.status(500).json({ error: 'Could not load routes' });
+  }
+});
+
+app.post('/api/routes', async (req, res) => {
+  const route = req.body;
+  if (!route || !Array.isArray(route.waypoints)) {
+    return res.status(400).json({ error: 'Malformed route' });
+  }
+  const id = route.id || `route_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const toSave = { ...route, id, savedAt: route.savedAt || new Date().toISOString() };
+  try {
+    await pool.query(
+      `INSERT INTO kv_store (key, value, updated_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [`route:${id}`, JSON.stringify(toSave)]
+    );
+    res.json(toSave);
+  } catch (err) {
+    console.error('POST /api/routes failed', err);
+    res.status(500).json({ error: 'Could not save route' });
+  }
+});
+
+app.delete('/api/routes/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM kv_store WHERE key = $1', [`route:${req.params.id}`]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('DELETE /api/routes failed', err);
+    res.status(500).json({ error: 'Could not delete route' });
+  }
+});
+
 // --- Voyage log -------------------------------------------------------
 // Each entry is its own kv_store row (key: log:<id>) rather than one
 // array in a single row, so entries can be added/removed independently.

@@ -252,7 +252,7 @@
   }
 
   /* ---------- Map view ---------- */
-  #map { position: absolute; inset: 0; }
+  #map { position: absolute; inset: 0; transition: bottom 0.28s ease; }
   .map-view { position: relative; flex: 1; }
   .map-status {
     position: absolute;
@@ -317,13 +317,17 @@
     flex-direction: column;
     z-index: 900;
     box-shadow: 0 -4px 14px rgba(0,0,0,0.12);
+    transition: height 0.28s ease;
   }
+  .route-panel.collapsed { height: auto; padding-bottom: 10px; }
   .route-panel-head {
     display: flex;
     align-items: center;
+    gap: 8px;
     justify-content: space-between;
     margin-bottom: 6px;
   }
+  .route-fold-btn { padding: 4px; color: var(--ink-soft); flex-shrink: 0; }
   .route-scroll { overflow-y: auto; flex: 1; }
   .route-summary {
     display: grid;
@@ -341,6 +345,38 @@
     border-top: 1px solid var(--line);
     margin-top: 8px;
   }
+  .route-subcard {
+    border-top: 1px solid var(--line);
+    padding-top: 10px;
+    margin-top: 10px;
+  }
+  .watch-btn-sm {
+    background: var(--case);
+    color: var(--panel-raised);
+    padding: 5px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .watch-btn-sm.active { background: var(--storm); }
+  .route-actions {
+    display: flex;
+    gap: 8px;
+    border-top: 1px solid var(--line);
+    padding-top: 10px;
+    margin-top: 10px;
+  }
+  .route-action-btn {
+    flex: 1;
+    background: var(--panel-raised);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 9px 4px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .route-action-btn:disabled { opacity: 0.45; }
   .speed-input {
     width: 64px;
     background: var(--panel-raised);
@@ -612,6 +648,12 @@ const Icon = {
       <path d="M7 7.5C10 10 8 13 11 15s5 1 8 3" strokeDasharray="1 3.4" />
     </svg>
   ),
+  Reverse: (p) => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <polyline points="17 1 21 5 17 9" /><path d="M3 11V9a4 4 0 0 1 4-4h14" />
+      <polyline points="7 23 3 19 7 15" /><path d="M21 13v2a4 4 0 0 1-4 4H3" />
+    </svg>
+  ),
   Log: (p) => (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
       <path d="M4 3h13l3 3v15H4z" /><path d="M17 3v4h3" /><line x1="8" y1="11" x2="15" y2="11" /><line x1="8" y1="15" x2="15" y2="15" />
@@ -779,6 +821,59 @@ async function saveLogEntry(entry) {
 }
 async function deleteLogEntry(id) {
   await fetch(`/api/log-entries/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+// --- Saved routes -----------------------------------------------------
+async function fetchRoutes() {
+  const r = await fetch('/api/routes');
+  if (!r.ok) throw new Error('routes fetch failed');
+  return r.json();
+}
+async function saveRouteApi(route) {
+  const r = await fetch('/api/routes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(route),
+  });
+  if (!r.ok) throw new Error('route save failed');
+  return r.json();
+}
+async function deleteRouteApi(id) {
+  await fetch(`/api/routes/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+function escapeXml(s) {
+  return String(s).replace(/[<>&'"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' }[c]));
+}
+
+// Standard GPX 1.1 — waypoints plus a track, so it opens sensibly in any
+// real GPS device or mapping app, not just something we built ourselves.
+function buildGPX(waypoints, closed, name) {
+  const trackPts = closed ? [...waypoints, waypoints[0]] : waypoints;
+  const wptTags = waypoints.map((w, i) => `  <wpt lat="${w.lat}" lon="${w.lon}"><name>Point ${i + 1}</name></wpt>`).join('\n');
+  const trkPts = trackPts.map((w) => `      <trkpt lat="${w.lat}" lon="${w.lon}"></trkpt>`).join('\n');
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Barometer PWA" xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata><name>${escapeXml(name || 'Route')}</name></metadata>
+${wptTags}
+  <trk>
+    <name>${escapeXml(name || 'Route')}</name>
+    <trkseg>
+${trkPts}
+    </trkseg>
+  </trk>
+</gpx>`;
+}
+
+function downloadGPX(waypoints, closed, name) {
+  const gpx = buildGPX(waypoints, closed, name);
+  const blob = new Blob([gpx], { type: 'application/gpx+xml' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${(name || 'route').replace(/[^a-z0-9-_]/gi, '_')}.gpx`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // Resizes/compresses a photo client-side before it ever reaches the
@@ -987,7 +1082,7 @@ async function fetchMarine(lat, lon) {
     latitude: lat,
     longitude: lon,
     current: 'wave_height,wave_direction,wave_period,swell_wave_height,swell_wave_direction,swell_wave_period,sea_surface_temperature,ocean_current_velocity,ocean_current_direction',
-    hourly: 'sea_level_height_msl',
+    hourly: 'sea_level_height_msl,ocean_current_velocity,ocean_current_direction',
     daily: 'wave_height_max,wave_direction_dominant,swell_wave_height_max,swell_wave_direction_dominant',
     length_unit: 'metric',
     wind_speed_unit: 'kn',
@@ -1042,6 +1137,36 @@ function initialBearing(lat1, lon1, lat2, lon2) {
   const y = Math.sin(toRad(lon2 - lon1)) * Math.cos(toRad(lat2));
   const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) - Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(toRad(lon2 - lon1));
   return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+// Suggests a departure time by checking the forecast ocean current at each
+// upcoming hour against the route's overall direction — a simplified
+// "tidal gate" advisor. This applies one current value to the whole route
+// rather than per-leg, and the underlying model is coarse (Open-Meteo's
+// own docs note ~8km resolution, unreliable in complex coastlines) — a
+// useful steer for open water, not a precise per-leg prediction.
+function computeTidalGate(marine, waypoints, plannedSpeedKn, totalKm) {
+  if (!marine || !marine.hourly || !Array.isArray(marine.hourly.ocean_current_velocity) || waypoints.length < 2) return null;
+  const { time, ocean_current_velocity, ocean_current_direction } = marine.hourly;
+  const first = waypoints[0], last = waypoints[waypoints.length - 1];
+  const overallBearing = initialBearing(first.lat, first.lon, last.lat, last.lon);
+  const now = Date.now();
+  const windows = [];
+  for (let i = 0; i < time.length && windows.length < 18; i++) {
+    const t = new Date(time[i]).getTime();
+    if (Number.isNaN(t) || t < now - 3600000) continue;
+    const vel = ocean_current_velocity[i], dir = ocean_current_direction[i];
+    if (vel == null || dir == null) continue;
+    const along = vel * Math.cos(((dir - overallBearing) * Math.PI) / 180);
+    const effectiveKn = plannedSpeedKn + along;
+    const hours = effectiveKn > 0.05 ? totalKm / (effectiveKn * KN_TO_KMH) : null;
+    windows.push({ time: time[i], hours, along });
+  }
+  if (windows.length === 0) return null;
+  const withEta = windows.filter((w) => w.hours != null);
+  if (withEta.length === 0) return { windows, best: null, now: windows[0], overallBearing };
+  const best = withEta.reduce((a, b) => (b.hours < a.hours ? b : a));
+  return { windows, best, now: windows[0], overallBearing };
 }
 
 // --- Official UK/Ireland tide predictions (Admiralty / UKHO) --------------
@@ -2094,14 +2219,139 @@ function MapView({ location }) {
 --------------------------------------------------------------------- */
 const KN_TO_KMH = 1.852;
 
+function RouteSaveSheet({ onSave, onClose }) {
+  const [name, setName] = useState('');
+  const [saving, setSaving] = useState(false);
+  return ReactDOM.createPortal(
+    <div className="sheet-backdrop" onClick={onClose}>
+      <div className="sheet" style={{ maxHeight: '50vh' }} onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-grip" />
+        <div className="sheet-title-row">
+          <h2>Save Route</h2>
+          <button className="icon-btn" onClick={onClose} aria-label="Close"><Icon.Close /></button>
+        </div>
+        <input
+          className="log-input"
+          placeholder="Name this route"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          autoFocus
+        />
+        <button
+          className="watch-btn"
+          style={{ width: '100%', marginTop: 12 }}
+          disabled={saving}
+          onClick={async () => { setSaving(true); await onSave(name.trim() || 'Unnamed route'); }}
+        >
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function RouteLoadSheet({ onLoad, onClose }) {
+  const [routes, setRoutes] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchRoutes().then(setRoutes).catch(() => {}).finally(() => setLoading(false));
+  }, []);
+
+  async function handleDelete(id) {
+    await deleteRouteApi(id);
+    setRoutes((r) => r.filter((route) => route.id !== id));
+  }
+
+  return ReactDOM.createPortal(
+    <div className="sheet-backdrop" onClick={onClose}>
+      <div className="sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-grip" />
+        <div className="sheet-title-row">
+          <h2>Load Route</h2>
+          <button className="icon-btn" onClick={onClose} aria-label="Close"><Icon.Close /></button>
+        </div>
+        <div className="sheet-scroll">
+          {loading ? (
+            <p className="empty-hint">Loading…</p>
+          ) : routes.length === 0 ? (
+            <p className="empty-hint">No saved routes yet.</p>
+          ) : (
+            routes.map((route) => (
+              <div className="fav-row" key={route.id}>
+                <button className="fav-main" onClick={() => onLoad(route)}>
+                  <span className="name">{route.name || 'Unnamed route'}</span>
+                  <span className="sub">{route.waypoints.length} points{route.closed ? ', closed loop' : ''}</span>
+                </button>
+                <button className="icon-btn" onClick={() => handleDelete(route.id)} aria-label="Delete route"><Icon.Trash /></button>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 function RouteView({ location, marine, windUnit }) {
   const mapRef = useRef(null);
   const leafletRef = useRef(null);
   const layerRef = useRef(null);
+  const myMarkerRef = useRef(null);
   const rowRefs = useRef({});
+  const watchIdRef = useRef(null);
   const [waypoints, setWaypoints] = useState([]);
   const [plannedSpeed, setPlannedSpeed] = useState(3);
   const [closed, setClosed] = useState(false);
+  const [panelCollapsed, setPanelCollapsed] = useState(false);
+  const [tracking, setTracking] = useState(false);
+  const [myPosition, setMyPosition] = useState(null);
+  const [trackError, setTrackError] = useState(null);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [loadOpen, setLoadOpen] = useState(false);
+
+  // Leaflet doesn't notice CSS-driven container resizes on its own — tell
+  // it to remeasure after the panel's collapse/expand transition finishes.
+  useEffect(() => {
+    if (!leafletRef.current) return;
+    const t = setTimeout(() => leafletRef.current.invalidateSize(), 280);
+    return () => clearTimeout(t);
+  }, [panelCollapsed]);
+
+  // Live tracking is foreground-only — iOS suspends background web apps,
+  // same limitation as everything else in this app that's tried to use
+  // geolocation continuously. Stated plainly in the UI, not just here.
+  function startTracking() {
+    if (!('geolocation' in navigator)) { setTrackError('Geolocation is not available in this browser.'); return; }
+    setTrackError(null);
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (pos) => setMyPosition({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+      () => setTrackError('Lost GPS signal — position updates stopped.'),
+      { enableHighAccuracy: true, maximumAge: 5000 }
+    );
+    setTracking(true);
+  }
+  function stopTracking() {
+    if (watchIdRef.current != null) navigator.geolocation.clearWatch(watchIdRef.current);
+    watchIdRef.current = null;
+    setTracking(false);
+    setMyPosition(null);
+    setTrackError(null);
+  }
+  useEffect(() => () => { if (watchIdRef.current != null) navigator.geolocation.clearWatch(watchIdRef.current); }, []);
+
+  useEffect(() => {
+    if (!leafletRef.current) return;
+    if (myMarkerRef.current) { leafletRef.current.removeLayer(myMarkerRef.current); myMarkerRef.current = null; }
+    if (myPosition) {
+      myMarkerRef.current = L.circleMarker([myPosition.lat, myPosition.lon], {
+        radius: 8, color: '#A23E32', fillColor: '#A23E32', fillOpacity: 0.9, weight: 2,
+      }).addTo(leafletRef.current);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [myPosition]);
 
   useEffect(() => {
     if (!location || leafletRef.current) return;
@@ -2223,19 +2473,31 @@ function RouteView({ location, marine, windUnit }) {
     return h > 0 ? `${h}h ${m}m` : `${m}m`;
   }
 
+  const tidalGate = computeTidalGate(marine, waypoints, plannedSpeedKn, totalKm);
+  const trackTarget = waypoints.length > 0 ? (closed ? waypoints[0] : waypoints[waypoints.length - 1]) : null;
+  const distanceRemainingKm = myPosition && trackTarget ? haversineKm(myPosition.lat, myPosition.lon, trackTarget.lat, trackTarget.lon) : null;
+
   return (
     <div className="view map-view">
-      <div id="map" ref={mapRef} style={{ bottom: '40%' }}></div>
-      <div className="route-panel">
+      <div id="map" ref={mapRef} style={{ bottom: panelCollapsed ? '56px' : '40%' }}></div>
+      <div className={`route-panel ${panelCollapsed ? 'collapsed' : ''}`}>
         <div className="route-panel-head">
-          <span className="card-label" style={{ margin: 0 }}>
+          <button className="route-fold-btn" onClick={() => setPanelCollapsed((c) => !c)} aria-label={panelCollapsed ? 'Expand route panel' : 'Collapse route panel, show more map'}>
+            <Icon.Chevron style={{ transform: panelCollapsed ? 'none' : 'rotate(180deg)' }} />
+          </button>
+          <span className="card-label" style={{ margin: 0, flex: 1 }}>
             Route ({waypoints.length} point{waypoints.length === 1 ? '' : 's'}{closed ? ', closed loop' : ''})
           </span>
+          {waypoints.length > 1 && (
+            <button className="icon-btn" onClick={() => setWaypoints((wp) => [...wp].reverse())} aria-label="Reverse route"><Icon.Reverse /></button>
+          )}
           <button className="icon-btn" onClick={() => { setWaypoints([]); setClosed(false); }} aria-label="Clear route"><Icon.Trash /></button>
         </div>
+        {!panelCollapsed && (
+        <React.Fragment>
         {waypoints.length === 0 ? (
           <p className="empty-hint">Tap the map to drop waypoints. Drag a point to move it, or tap it for options — including closing the loop back to point 1.</p>
-        ) : (
+        ) : null}
           <div className="route-scroll">
             {waypoints.map((wp, i) => (
               <React.Fragment key={i}>
@@ -2271,7 +2533,6 @@ function RouteView({ location, marine, windUnit }) {
               <div className="empty-hint" style={{ padding: '4px 4px 0' }}>No ocean current data here — time estimate uses planned speed only.</div>
             )}
           </div>
-        )}
         <div className="speed-row">
           <span className="card-label" style={{ margin: 0 }}>Planned speed</span>
           <input
@@ -2284,7 +2545,72 @@ function RouteView({ location, marine, windUnit }) {
           />
           <span className="lcd-unit" style={{ color: 'var(--ink-soft)', fontSize: 12 }}>{windUnit === 'mph' ? 'MPH' : 'KN'}</span>
         </div>
+
+        {tidalGate && tidalGate.best && (
+          <div className="route-subcard">
+            <div className="card-label" style={{ margin: 0 }}>Best departure (tidal gate)</div>
+            <div style={{ fontSize: 13, marginTop: 4 }}>
+              {new Date(tidalGate.best.time).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}
+              {' — '}ETA {formatDuration(tidalGate.best.hours)}
+              {tidalGate.now.hours != null && tidalGate.best.hours < tidalGate.now.hours - 0.02 && (
+                <span style={{ color: 'var(--ink-soft)' }}> (vs {formatDuration(tidalGate.now.hours)} leaving now)</span>
+              )}
+            </div>
+            <div className="empty-hint" style={{ padding: '4px 0 0' }}>
+              Approximate — applies one current value to the whole route, and Open-Meteo's own model is coarse (~8km) and less reliable in tight coastlines.
+            </div>
+          </div>
+        )}
+
+        {waypoints.length > 0 && (
+          <div className="route-subcard">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span className="card-label" style={{ margin: 0 }}>Live tracking</span>
+              <button className={`watch-btn-sm ${tracking ? 'active' : ''}`} onClick={tracking ? stopTracking : startTracking}>
+                {tracking ? 'Stop' : 'Start'}
+              </button>
+            </div>
+            {tracking && (
+              <div style={{ fontSize: 13, marginTop: 6 }} className="mono">
+                {distanceRemainingKm != null ? `${distanceRemainingKm.toFixed(2)} km to ${closed ? 'start' : 'end'}` : 'Waiting for GPS…'}
+              </div>
+            )}
+            {trackError && <div className="empty-hint" style={{ padding: '4px 0 0' }}>{trackError}</div>}
+            <div className="empty-hint" style={{ padding: '4px 0 0' }}>
+              Only works with this screen open and your phone unlocked — iOS suspends web apps in the background.
+            </div>
+          </div>
+        )}
+
+        <div className="route-actions">
+          <button className="route-action-btn" onClick={() => setSaveOpen(true)} disabled={waypoints.length < 2}>Save Route</button>
+          <button className="route-action-btn" onClick={() => setLoadOpen(true)}>Load Route</button>
+          <button className="route-action-btn" onClick={() => downloadGPX(waypoints, closed, 'route')} disabled={waypoints.length < 2}>Export GPX</button>
+        </div>
+        </React.Fragment>
+        )}
       </div>
+
+      {saveOpen && (
+        <RouteSaveSheet
+          onSave={async (name) => {
+            await saveRouteApi({ name, waypoints, closed, plannedSpeed, windUnit });
+            setSaveOpen(false);
+          }}
+          onClose={() => setSaveOpen(false)}
+        />
+      )}
+      {loadOpen && (
+        <RouteLoadSheet
+          onLoad={(route) => {
+            setWaypoints(route.waypoints);
+            setClosed(!!route.closed);
+            if (route.plannedSpeed) setPlannedSpeed(route.plannedSpeed);
+            setLoadOpen(false);
+          }}
+          onClose={() => setLoadOpen(false)}
+        />
+      )}
     </div>
   );
 }
