@@ -104,7 +104,20 @@
   .update-row {
     font-size: 12px;
     color: rgba(240, 221, 174, 0.65);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+  .update-row-line {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     margin-top: 6px;
+  }
+  .fav-toggle {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 11px;
+    color: rgba(240, 221, 174, 0.65);
     font-family: 'IBM Plex Mono', monospace;
   }
 
@@ -372,6 +385,9 @@
     font-family: 'Inter', sans-serif;
     cursor: pointer;
   }
+  .popup-actions { display: flex; gap: 6px; }
+  .popup-icon-btn { padding: 6px 8px; display: flex; align-items: center; }
+  .popup-close-btn { background: var(--case); white-space: nowrap; }
 
   .watch-btn {
     background: var(--case);
@@ -2082,8 +2098,10 @@ function RouteView({ location, marine, windUnit }) {
   const mapRef = useRef(null);
   const leafletRef = useRef(null);
   const layerRef = useRef(null);
+  const rowRefs = useRef({});
   const [waypoints, setWaypoints] = useState([]);
   const [plannedSpeed, setPlannedSpeed] = useState(3);
+  const [closed, setClosed] = useState(false);
 
   useEffect(() => {
     if (!location || leafletRef.current) return;
@@ -2096,7 +2114,11 @@ function RouteView({ location, marine, windUnit }) {
       attribution: 'Seamarks &copy; OpenSeaMap contributors',
       maxZoom: 18,
     }).addTo(map);
+    // Default bottom-right attribution collides with the route panel
+    // overlaying the bottom 40% of this screen — move it clear of that.
+    if (map.attributionControl) map.attributionControl.setPosition('topright');
     map.on('click', (e) => {
+      setClosed(false);
       setWaypoints((wp) => [...wp, { lat: e.latlng.lat, lon: e.latlng.lng }]);
     });
     leafletRef.current = map;
@@ -2104,16 +2126,25 @@ function RouteView({ location, marine, windUnit }) {
   }, [location]);
 
   function removeWaypoint(index) {
-    setWaypoints((wp) => wp.filter((_, i) => i !== index));
+    setWaypoints((wp) => {
+      const next = wp.filter((_, i) => i !== index);
+      if (next.length < 2) setClosed(false);
+      return next;
+    });
   }
   function updateWaypoint(index, lat, lon) {
     setWaypoints((wp) => wp.map((p, i) => (i === index ? { lat, lon } : p)));
+  }
+  function scrollToPoint(i) {
+    const el = rowRefs.current[i];
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   useEffect(() => {
     if (!leafletRef.current) return;
     if (layerRef.current) leafletRef.current.removeLayer(layerRef.current);
     const group = L.layerGroup();
+    const trashSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#F0DDAE" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6M14 11v6"></path></svg>';
     waypoints.forEach((wp, i) => {
       const marker = L.marker([wp.lat, wp.lon], {
         icon: L.divIcon({ className: 'isobar-label', html: String(i + 1), iconSize: [22, 22] }),
@@ -2123,19 +2154,33 @@ function RouteView({ location, marine, windUnit }) {
         const { lat, lng } = marker.getLatLng();
         updateWaypoint(i, lat, lng);
       });
-      marker.bindPopup(`<button type="button" class="popup-remove-btn">Remove point ${i + 1}</button>`);
+      const canClose = i === 0 && waypoints.length >= 2 && !closed;
+      marker.bindPopup(
+        canClose
+          ? `<div class="popup-actions"><button type="button" class="popup-remove-btn popup-close-btn">Close Loop</button><button type="button" class="popup-remove-btn popup-icon-btn" aria-label="Remove point">${trashSvg}</button></div>`
+          : `<button type="button" class="popup-remove-btn popup-icon-btn" aria-label="Remove point">${trashSvg}</button>`
+      );
       marker.on('popupopen', (e) => {
-        const btn = e.popup.getElement() && e.popup.getElement().querySelector('.popup-remove-btn');
-        if (btn) btn.onclick = () => removeWaypoint(i);
+        scrollToPoint(i);
+        const el = e.popup.getElement();
+        if (!el) return;
+        const removeBtn = el.querySelector('.popup-icon-btn');
+        if (removeBtn) removeBtn.onclick = () => removeWaypoint(i);
+        const closeBtn = el.querySelector('.popup-close-btn');
+        if (closeBtn) closeBtn.onclick = () => { setClosed(true); marker.closePopup(); };
       });
+      marker.on('click', () => scrollToPoint(i));
       marker.addTo(group);
     });
     if (waypoints.length > 1) {
-      L.polyline(waypoints.map((w) => [w.lat, w.lon]), { color: '#211A0F', weight: 2.5, dashArray: '6 5' }).addTo(group);
+      const linePts = waypoints.map((w) => [w.lat, w.lon]);
+      if (closed) linePts.push([waypoints[0].lat, waypoints[0].lon]);
+      L.polyline(linePts, { color: '#211A0F', weight: 2.5, dashArray: '6 5' }).addTo(group);
     }
     group.addTo(leafletRef.current);
     layerRef.current = group;
-  }, [waypoints]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [waypoints, closed]);
 
   const legs = [];
   for (let i = 0; i < waypoints.length - 1; i++) {
@@ -2143,6 +2188,14 @@ function RouteView({ location, marine, windUnit }) {
     legs.push({
       distanceKm: haversineKm(a.lat, a.lon, b.lat, b.lon),
       bearing: initialBearing(a.lat, a.lon, b.lat, b.lon),
+    });
+  }
+  if (closed && waypoints.length >= 2) {
+    const a = waypoints[waypoints.length - 1], b = waypoints[0];
+    legs.push({
+      distanceKm: haversineKm(a.lat, a.lon, b.lat, b.lon),
+      bearing: initialBearing(a.lat, a.lon, b.lat, b.lon),
+      closing: true,
     });
   }
   const totalKm = legs.reduce((s, l) => s + l.distanceKm, 0);
@@ -2175,16 +2228,18 @@ function RouteView({ location, marine, windUnit }) {
       <div id="map" ref={mapRef} style={{ bottom: '40%' }}></div>
       <div className="route-panel">
         <div className="route-panel-head">
-          <span className="card-label" style={{ margin: 0 }}>Route ({waypoints.length} point{waypoints.length === 1 ? '' : 's'})</span>
-          <button className="icon-btn" onClick={() => setWaypoints([])} aria-label="Clear route"><Icon.Trash /></button>
+          <span className="card-label" style={{ margin: 0 }}>
+            Route ({waypoints.length} point{waypoints.length === 1 ? '' : 's'}{closed ? ', closed loop' : ''})
+          </span>
+          <button className="icon-btn" onClick={() => { setWaypoints([]); setClosed(false); }} aria-label="Clear route"><Icon.Trash /></button>
         </div>
         {waypoints.length === 0 ? (
-          <p className="empty-hint">Tap the map to drop waypoints and build a route. Drag a point to move it, or tap it for a remove option.</p>
+          <p className="empty-hint">Tap the map to drop waypoints. Drag a point to move it, or tap it for options — including closing the loop back to point 1.</p>
         ) : (
           <div className="route-scroll">
             {waypoints.map((wp, i) => (
               <React.Fragment key={i}>
-                <div className="fav-row">
+                <div className="fav-row" ref={(el) => { rowRefs.current[i] = el; }}>
                   <div className="fav-main">
                     <span className="name">Point {i + 1}</span>
                     <span className="sub">{wp.lat.toFixed(4)}, {wp.lon.toFixed(4)}</span>
@@ -2193,7 +2248,9 @@ function RouteView({ location, marine, windUnit }) {
                 </div>
                 {legs[i] && (
                   <div style={{ padding: '2px 4px 8px', fontSize: 12, color: 'var(--ink-soft)' }}>
-                    ↳ {legs[i].distanceKm.toFixed(2)} km · bearing {legs[i].bearing.toFixed(0)}°
+                    {legs[i].closing
+                      ? `↳ closing leg to Point 1: ${legs[i].distanceKm.toFixed(2)} km · bearing ${legs[i].bearing.toFixed(0)}°`
+                      : `↳ ${legs[i].distanceKm.toFixed(2)} km · bearing ${legs[i].bearing.toFixed(0)}°`}
                   </div>
                 )}
               </React.Fragment>
@@ -2549,6 +2606,7 @@ function App() {
   }, []);
 
   const [tempLocation, setTempLocation] = useState(null);
+  const [showFavourites, setShowFavourites] = useState(false);
 
   const activeLocation = useMemo(() => {
     if (tempLocation) return tempLocation;
@@ -2685,9 +2743,16 @@ function App() {
             <Icon.Refresh />
           </button>
         </div>
-        <div className="update-row">Last update: {relativeTime(lastFetchedAt)}</div>
-        {state.locations.length > 0 && (
-          <div className="day-tabs" style={{ marginTop: 10 }}>
+        <div className="update-row-line">
+          <span className="update-row">Last update: {relativeTime(lastFetchedAt)}</span>
+          {state.locations.length > 0 && (
+            <button className="fav-toggle" onClick={() => setShowFavourites((s) => !s)}>
+              Favourites <Icon.Chevron style={{ transform: showFavourites ? 'rotate(180deg)' : 'none', width: 11, height: 11 }} />
+            </button>
+          )}
+        </div>
+        {showFavourites && state.locations.length > 0 && (
+          <div className="day-tabs" style={{ marginTop: 8 }}>
             {state.locations.map((loc) => (
               <button
                 key={loc.id}
