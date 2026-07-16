@@ -566,6 +566,138 @@
   .unit-toggle button.active { background: var(--case); color: var(--panel-raised); }
 
   .empty-hint { font-size: 13px; color: var(--ink-soft); padding: 8px 4px 14px; }
+
+  /* ---------- Voyage log ---------- */
+  .stats-strip {
+    display: flex;
+    gap: 14px;
+    margin: 6px 14px 0;
+    padding: 10px 14px;
+    background: var(--panel-raised);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    justify-content: space-between;
+  }
+  .stats-strip .stat .value { font-size: 16px; }
+  .month-header {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    padding: 14px 18px 0;
+  }
+  .log-card {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    width: calc(100% - 28px);
+    text-align: left;
+  }
+  .log-thumb {
+    width: 64px; height: 64px;
+    border-radius: 10px;
+    overflow: hidden;
+    flex-shrink: 0;
+    position: relative;
+    background: var(--panel);
+  }
+  .log-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .log-thumb-icon { display: flex; align-items: center; justify-content: center; color: var(--ink-soft); }
+  .photo-count {
+    position: absolute;
+    bottom: 3px; right: 3px;
+    background: rgba(33, 26, 15, 0.75);
+    color: var(--panel-raised);
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 6px;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+  .log-card-main { flex: 1; min-width: 0; }
+  .log-card-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .log-card-top .name {
+    font-weight: 600;
+    font-size: 14px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .rating-dots { font-size: 8px; letter-spacing: 2px; color: var(--ink); flex-shrink: 0; }
+  .log-sub { font-size: 11px; color: var(--ink-soft); margin-top: 2px; }
+  .log-summary {
+    font-size: 11px;
+    color: var(--ink-soft);
+    margin-top: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .log-comment { font-size: 12px; margin-top: 3px; }
+
+  .photo-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 4px; }
+  .photo-slot {
+    position: relative;
+    aspect-ratio: 1;
+    border-radius: 10px;
+    overflow: hidden;
+    border: 2px solid transparent;
+  }
+  .photo-slot.feature { border-color: var(--ink); }
+  .photo-slot img { width: 100%; height: 100%; object-fit: cover; display: block; cursor: pointer; }
+  .photo-remove {
+    position: absolute;
+    top: 2px; right: 2px;
+    background: rgba(33, 26, 15, 0.7);
+    color: var(--panel-raised);
+    border-radius: 50%;
+    width: 20px; height: 20px;
+    display: flex; align-items: center; justify-content: center;
+    padding: 0;
+  }
+  .feature-badge {
+    position: absolute;
+    bottom: 2px; left: 2px;
+    background: rgba(33, 26, 15, 0.75);
+    color: var(--panel-raised);
+    font-size: 8px;
+    padding: 1px 5px;
+    border-radius: 6px;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+  .photo-add {
+    aspect-ratio: 1;
+    border: 1.5px dashed var(--ink-soft);
+    border-radius: 10px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 4px;
+    color: var(--ink-soft);
+    font-size: 11px;
+    background: var(--panel-raised);
+  }
+  .activity-row { display: flex; gap: 6px; margin-top: 4px; }
+  .activity-chip {
+    flex: 1;
+    display: flex; flex-direction: column; align-items: center;
+    gap: 3px;
+    padding: 8px 0;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    background: var(--panel-raised);
+    font-size: 11px;
+    color: var(--ink-soft);
+  }
+  .activity-chip.active { background: var(--case); color: var(--panel-raised); border-color: var(--case); }
+  .rating-row { display: flex; gap: 10px; margin-top: 6px; align-items: center; }
+  .rating-dot { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--ink-soft); background: transparent; padding: 0; }
+  .rating-dot.on { background: var(--ink); border-color: var(--ink); }
+
+  .detail-hero { width: 100%; border-radius: 12px; display: block; }
+  .detail-thumbs { display: flex; gap: 8px; margin-top: 8px; }
+  .detail-thumbs img { width: 56px; height: 56px; border-radius: 8px; object-fit: cover; opacity: 0.65; cursor: pointer; }
+  .detail-thumbs img.active { opacity: 1; outline: 2px solid var(--ink); }
+  .detail-actions { display: flex; gap: 8px; margin-top: 16px; }
+  .detail-actions .danger { background: var(--storm); color: var(--panel-raised); border-color: var(--storm); }
 </style>
 </head>
 <body>
@@ -690,7 +822,42 @@ const Icon = {
       <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
     </svg>
   ),
+  Camera: (p) => (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" /><circle cx="12" cy="13" r="4" />
+    </svg>
+  ),
+  Kayak: (p) => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <path d="M2 12c5-5 15-5 20 0-5 5-15 5-20 0Z" /><circle cx="12" cy="12" r="1.8" />
+    </svg>
+  ),
+  Swim: (p) => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <circle cx="16.5" cy="7.5" r="2" /><path d="M3 12l7-4 5 3" />
+      <path d="M2 18c1.7 1.3 3.3 1.3 5 0s3.3-1.3 5 0 3.3 1.3 5 0 3.3-1.3 5 0" />
+    </svg>
+  ),
+  Sail: (p) => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <path d="M12 2v15" /><path d="M12 4c4 2.5 5.5 7 4.5 13H12" /><path d="M4 19h16l-2 3H6z" />
+    </svg>
+  ),
+  Flag: (p) => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <path d="M5 22V4" /><path d="M5 4c5-2 9 2 14 0v10c-5 2-9-2-14 0" />
+    </svg>
+  ),
 };
+
+// Activity types for log entries — kept to a deliberate few, "other"
+// catches the rest.
+const ACTIVITIES = [
+  { id: 'kayak', label: 'Kayak', Icon: Icon.Kayak },
+  { id: 'swim', label: 'Swim', Icon: Icon.Swim },
+  { id: 'sail', label: 'Sail', Icon: Icon.Sail },
+  { id: 'other', label: 'Other', Icon: Icon.Flag },
+];
 
 /* ---------------------------------------------------------------------
    Seven-segment digit display — the LCD readout look
@@ -851,6 +1018,13 @@ async function saveLogEntry(entry) {
 async function deleteLogEntry(id) {
   await fetch(`/api/log-entries/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
+// The list endpoint strips full-size photos for speed — this fetches one
+// complete entry (all photos) for the detail sheet / share image.
+async function fetchLogEntry(id) {
+  const r = await fetch(`/api/log-entries/${encodeURIComponent(id)}`);
+  if (!r.ok) throw new Error('log entry fetch failed');
+  return r.json();
+}
 
 // --- Saved routes -----------------------------------------------------
 async function fetchRoutes() {
@@ -963,73 +1137,127 @@ function wrapCanvasText(ctx, text, x, y, maxWidth, lineHeight, maxLines) {
   return y + lineHeight;
 }
 
-// Composites a log entry (photo + weather + comment) into a single shareable
-// image in the app's own amber/ink style, sized for WhatsApp/Messages.
-function buildShareImage(entry) {
+// Downscale an already-loaded data-URL image — used to store a small list
+// thumbnail alongside the full-size photos, so the log list stays fast no
+// matter how many entries build up.
+function scaleDataUrl(dataUrl, maxDim, quality) {
   return new Promise((resolve, reject) => {
-    const W = 1080, H = 1350;
-    const canvas = document.createElement('canvas');
-    canvas.width = W;
-    canvas.height = H;
-    const ctx = canvas.getContext('2d');
-
-    function draw(photoImg) {
-      ctx.fillStyle = '#D99A44';
-      ctx.fillRect(0, 0, W, H);
-      ctx.textBaseline = 'top';
-
-      let top = 56;
-      if (photoImg) {
-        const photoH = Math.round(H * 0.5);
-        const scale = Math.max(W / photoImg.width, photoH / photoImg.height);
-        const sw = W / scale, sh = photoH / scale;
-        const sx = (photoImg.width - sw) / 2, sy = (photoImg.height - sh) / 2;
-        ctx.drawImage(photoImg, sx, sy, sw, sh, 0, 0, W, photoH);
-        top = photoH + 48;
+    const img = new Image();
+    img.onerror = () => reject(new Error('could not decode image'));
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > height && width > maxDim) {
+        height = Math.round((height * maxDim) / width);
+        width = maxDim;
+      } else if (height >= width && height > maxDim) {
+        width = Math.round((width * maxDim) / height);
+        height = maxDim;
       }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.src = dataUrl;
+  });
+}
 
-      ctx.fillStyle = '#211A0F';
-      ctx.font = '600 46px sans-serif';
-      ctx.fillText(entry.locationLabel || 'Voyage Log', 56, top);
-      top += 62;
+// Photos accessor that also understands pre-gallery entries, which stored
+// a single `photo` string rather than a `photos` array.
+function entryPhotos(entry) {
+  if (Array.isArray(entry.photos)) return entry.photos;
+  return entry.photo ? [entry.photo] : [];
+}
 
-      const d = new Date(entry.date);
-      ctx.fillStyle = '#7A5C33';
-      ctx.font = '400 28px monospace';
-      ctx.fillText(d.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }), 56, top);
-      top += 52;
+function loadShareImg(src) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null); // a broken photo shouldn't sink the whole share
+    img.src = src;
+  });
+}
 
-      if (entry.weather) {
-        const w = entry.weather;
-        const windDirStr = w.windDir != null ? ` ${compassLabel(w.windDir)}` : '';
-        const parts = [`${w.pressure.toFixed(0)} hPa`, `${w.temp.toFixed(0)}°C`, `${Math.round(w.windSpeed)} ${w.windUnit === 'mph' ? 'mph' : 'kn'}${windDirStr} wind`];
-        if (w.shore) parts.push(w.shore);
-        if (w.waterTemp != null) parts.push(`water ${w.waterTemp.toFixed(0)}°C`);
-        if (w.waveHeight != null) parts.push(`${w.waveHeight.toFixed(1)}m waves`);
-        if (w.swellHeight != null) parts.push(`${w.swellHeight.toFixed(1)}m swell`);
-        if (w.tideHeight != null) parts.push(`tide ${w.tideHeight.toFixed(1)}m${w.tideTrend ? `, ${w.tideTrend}` : ''}`);
-        ctx.fillStyle = '#211A0F';
-        ctx.font = '600 30px monospace';
-        top = wrapCanvasText(ctx, parts.join('   ·   '), 56, top, W - 112, 40) + 12;
-      }
+// Cover-crop draw (like CSS object-fit: cover) into the given rect.
+function drawCover(ctx, img, dx, dy, dw, dh) {
+  const scale = Math.max(dw / img.width, dh / img.height);
+  const sw = dw / scale, sh = dh / scale;
+  const sx = (img.width - sw) / 2, sy = (img.height - sh) / 2;
+  ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
+}
 
-      if (entry.comment) {
-        ctx.fillStyle = '#211A0F';
-        ctx.font = '400 30px sans-serif';
-        wrapCanvasText(ctx, entry.comment, 56, top, W - 112, 42, 6);
-      }
+// Composites a log entry into a single shareable image in the app's own
+// amber/ink style, sized for WhatsApp/Messages — the feature photo as the
+// hero, up to three more photos as a tile strip beneath it, then the
+// conditions line and comment.
+async function buildShareImage(entry) {
+  const W = 1080, H = 1350, M = 56;
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
 
-      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('toBlob failed'))), 'image/jpeg', 0.9);
+  const photos = entryPhotos(entry);
+  const fIdx = Math.min(entry.featureIdx || 0, Math.max(0, photos.length - 1));
+  const hero = photos.length > 0 ? await loadShareImg(photos[fIdx]) : null;
+  const others = (await Promise.all(
+    photos.filter((_, i) => i !== fIdx).slice(0, 3).map(loadShareImg)
+  )).filter(Boolean);
+
+  ctx.fillStyle = '#D99A44';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textBaseline = 'top';
+
+  let top = M;
+  if (hero) {
+    const heroH = Math.round(H * (others.length > 0 ? 0.42 : 0.5));
+    drawCover(ctx, hero, 0, 0, W, heroH);
+    top = heroH;
+    if (others.length > 0) {
+      const gap = 8, tileH = 190;
+      const tileW = Math.floor((W - gap * (others.length - 1)) / others.length);
+      others.forEach((img, i) => drawCover(ctx, img, i * (tileW + gap), top + gap, tileW, tileH));
+      top += gap + tileH;
     }
+    top += 44;
+  }
 
-    if (entry.photo) {
-      const img = new Image();
-      img.onload = () => draw(img);
-      img.onerror = () => draw(null);
-      img.src = entry.photo;
-    } else {
-      draw(null);
-    }
+  ctx.fillStyle = '#211A0F';
+  ctx.font = '600 46px sans-serif';
+  ctx.fillText(entry.locationLabel || 'Voyage Log', M, top);
+  top += 62;
+
+  const d = new Date(entry.date);
+  const act = ACTIVITIES.find((a) => a.id === entry.activity);
+  ctx.fillStyle = '#7A5C33';
+  ctx.font = '400 28px monospace';
+  const subLine = `${act ? act.label + ' · ' : ''}${d.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}${entry.rating ? ' · ' + '●'.repeat(entry.rating) + '○'.repeat(5 - entry.rating) : ''}`;
+  ctx.fillText(subLine, M, top);
+  top += 52;
+
+  if (entry.weather) {
+    const w = entry.weather;
+    const windDirStr = w.windDir != null ? ` ${compassLabel(w.windDir)}` : '';
+    const parts = [`${w.pressure.toFixed(0)} hPa`, `${w.temp.toFixed(0)}°C`, `${Math.round(w.windSpeed)} ${w.windUnit === 'mph' ? 'mph' : 'kn'}${windDirStr} wind`];
+    if (w.shore) parts.push(w.shore);
+    if (w.waterTemp != null) parts.push(`water ${w.waterTemp.toFixed(0)}°C`);
+    if (w.waveHeight != null) parts.push(`${w.waveHeight.toFixed(1)}m waves`);
+    if (w.swellHeight != null) parts.push(`${w.swellHeight.toFixed(1)}m swell`);
+    if (w.tideHeight != null) parts.push(`tide ${w.tideHeight.toFixed(1)}m${w.tideTrend ? `, ${w.tideTrend}` : ''}`);
+    ctx.fillStyle = '#211A0F';
+    ctx.font = '600 30px monospace';
+    top = wrapCanvasText(ctx, parts.join('   ·   '), M, top, W - M * 2, 40) + 12;
+  }
+
+  if (entry.comment) {
+    ctx.fillStyle = '#211A0F';
+    ctx.font = '400 30px sans-serif';
+    wrapCanvasText(ctx, entry.comment, M, top, W - M * 2, 42, 6);
+  }
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('toBlob failed'))), 'image/jpeg', 0.9);
   });
 }
 
@@ -1093,11 +1321,14 @@ async function fetchWeather(lat, lon) {
     latitude: lat,
     longitude: lon,
     current: 'temperature_2m,relative_humidity_2m,apparent_temperature,pressure_msl,wind_speed_10m,wind_direction_10m',
-    hourly: 'pressure_msl,uv_index',
+    // temp/wind in hourly too (not just current) so log entries can
+    // snapshot the conditions at the entry's own date/time, and
+    // past_days=3 so a trip logged a day or two later still gets them.
+    hourly: 'pressure_msl,uv_index,temperature_2m,wind_speed_10m,wind_direction_10m',
     daily: 'temperature_2m_max,temperature_2m_min,wind_speed_10m_max,wind_direction_10m_dominant,uv_index_max',
     wind_speed_unit: 'kn',
     timezone: 'auto',
-    past_days: '1',
+    past_days: '3',
     forecast_days: '7',
   });
   const r = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`);
@@ -1115,12 +1346,14 @@ async function fetchMarine(lat, lon) {
     latitude: lat,
     longitude: lon,
     current: 'wave_height,wave_direction,wave_period,swell_wave_height,swell_wave_direction,swell_wave_period,sea_surface_temperature,ocean_current_velocity,ocean_current_direction',
-    hourly: 'sea_level_height_msl,ocean_current_velocity,ocean_current_direction',
+    // Wave/swell/sea-temp hourly too, for time-accurate log snapshots —
+    // same reasoning as the weather fetch's hourly params.
+    hourly: 'sea_level_height_msl,ocean_current_velocity,ocean_current_direction,wave_height,swell_wave_height,swell_wave_direction,sea_surface_temperature',
     daily: 'wave_height_max,wave_direction_dominant,swell_wave_height_max,swell_wave_direction_dominant',
     length_unit: 'metric',
     wind_speed_unit: 'kn',
     timezone: 'auto',
-    past_days: '1',
+    past_days: '3',
     forecast_days: '7',
   });
   const r = await fetch(`https://marine-api.open-meteo.com/v1/marine?${params}`);
@@ -2745,81 +2978,115 @@ function RouteView({ location, marine, windUnit }) {
 }
 
 /* ---------------------------------------------------------------------
-   Voyage log — form for a new entry (auto-captures the current weather
-   snapshot), and the list view with per-entry share-as-image.
+   Voyage log — form for new/edited entries (the conditions snapshot is
+   taken at the entry's own date/time from the hourly arrays, so logging
+   in the evening doesn't stamp an afternoon trip with evening weather),
+   a month-grouped list with activity filters and a small stats strip,
+   and a detail sheet with the photo gallery and share-as-image.
 --------------------------------------------------------------------- */
-function LogEntryForm({ weather, marine, location, windUnit, onClose, onSaved }) {
+const MAX_LOG_PHOTOS = 4;
+
+function LogEntryForm({ weather, marine, location, windUnit, entry, onClose, onSaved }) {
+  const editing = !!entry;
   const toLocalInputValue = (d) => {
     const pad = (n) => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   };
-  const [date, setDate] = useState(() => toLocalInputValue(new Date()));
-  const [comment, setComment] = useState('');
-  const [photo, setPhoto] = useState(null);
+  const originalDate = editing ? toLocalInputValue(new Date(entry.date)) : null;
+  const [date, setDate] = useState(() => (editing ? originalDate : toLocalInputValue(new Date())));
+  const [comment, setComment] = useState(editing ? entry.comment || '' : '');
+  const [photos, setPhotos] = useState(() => (editing ? entryPhotos(entry) : []));
+  const [featureIdx, setFeatureIdx] = useState(() =>
+    editing ? Math.min(entry.featureIdx || 0, Math.max(0, entryPhotos(entry).length - 1)) : 0
+  );
+  const [activity, setActivity] = useState(() =>
+    editing ? entry.activity || null : localStorage.getItem('lastLogActivity') || null
+  );
+  const [rating, setRating] = useState(editing ? entry.rating || null : null);
   const [photoError, setPhotoError] = useState(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
+  const fileRef = useRef(null);
 
-  async function handleFile(e) {
-    const file = e.target.files && e.target.files[0];
-    if (!file) return;
+  async function handleFiles(e) {
+    const files = Array.from(e.target.files || []).slice(0, MAX_LOG_PHOTOS - photos.length);
+    e.target.value = ''; // so picking the same file again re-fires onChange
+    if (files.length === 0) return;
     setPhotoError(null);
     try {
-      setPhoto(await compressImage(file, 1200, 0.8));
+      const added = [];
+      for (const f of files) added.push(await compressImage(f, 1200, 0.8));
+      setPhotos((p) => [...p, ...added].slice(0, MAX_LOG_PHOTOS));
     } catch {
-      setPhotoError("Couldn't read that photo — try a different one.");
+      setPhotoError("Couldn't read one of those photos — try a different one.");
     }
   }
 
-  function buildWeatherSnapshot() {
-    if (!weather || !weather.current) return null;
-    const cur = weather.current;
-    const mcur = marine && marine.current;
-    const shore = location && location.seaward != null ? classifyShoreWind(cur.wind_direction_10m, location.seaward) : null;
+  function removePhoto(i) {
+    setPhotos((p) => p.filter((_, idx) => idx !== i));
+    setFeatureIdx((f) => (i === f ? 0 : i < f ? f - 1 : f));
+  }
 
-    // Modeled tide reading at the current moment — same approach as the
-    // Tide card's own fallback, since a log entry doesn't need to trigger
-    // a separate official-station lookup just to capture a snapshot.
-    let tideHeight = null, tideTrend = null;
-    if (marine && marine.hourly && Array.isArray(marine.hourly.sea_level_height_msl)) {
-      const tTimes = marine.hourly.time;
-      const tHeights = marine.hourly.sea_level_height_msl;
-      const tIdx = findNowIndex(tTimes, cur.time);
-      if (tIdx !== -1 && tHeights[tIdx] != null) {
-        tideHeight = tHeights[tIdx];
-        const tPrev = tHeights[Math.max(0, tIdx - 1)];
-        tideTrend = tPrev != null ? (tideHeight > tPrev ? 'rising' : tideHeight < tPrev ? 'falling' : 'steady') : null;
-      }
+  // Conditions at the SELECTED date/time, looked up in the hourly arrays
+  // (3 days back to 7 days ahead). Recomputed live as the date changes.
+  function buildWeatherSnapshot(dateStr) {
+    if (!weather || !weather.hourly || !Array.isArray(weather.hourly.time)) return null;
+    const h = weather.hourly;
+    const idx = findNowIndex(h.time, dateStr);
+    if (idx === -1) return null; // earlier than the oldest hour we hold
+    const val = (name) => (h[name] && h[name][idx] != null ? h[name][idx] : null);
+    const pressure = val('pressure_msl'), temp = val('temperature_2m');
+    const windSpeed = val('wind_speed_10m'), windDir = val('wind_direction_10m');
+    if (pressure == null || temp == null || windSpeed == null) return null;
+    const shore = location && location.seaward != null && windDir != null ? classifyShoreWind(windDir, location.seaward) : null;
+
+    const mh = marine && marine.hourly;
+    const mIdx = mh && Array.isArray(mh.time) ? findNowIndex(mh.time, dateStr) : -1;
+    const mval = (name) => (mIdx !== -1 && mh[name] && mh[name][mIdx] != null ? mh[name][mIdx] : null);
+    const tideHeight = mval('sea_level_height_msl');
+    let tideTrend = null;
+    if (tideHeight != null && mIdx > 0 && mh.sea_level_height_msl[mIdx - 1] != null) {
+      const prev = mh.sea_level_height_msl[mIdx - 1];
+      tideTrend = tideHeight > prev ? 'rising' : tideHeight < prev ? 'falling' : 'steady';
     }
-
     return {
-      pressure: cur.pressure_msl,
-      temp: cur.temperature_2m,
-      windSpeed: cur.wind_speed_10m,
-      windDir: cur.wind_direction_10m,
-      windUnit,
-      shore,
-      waveHeight: mcur && typeof mcur.wave_height === 'number' ? mcur.wave_height : null,
-      swellHeight: mcur && typeof mcur.swell_wave_height === 'number' ? mcur.swell_wave_height : null,
-      swellDir: mcur && typeof mcur.swell_wave_direction === 'number' ? mcur.swell_wave_direction : null,
-      waterTemp: mcur && typeof mcur.sea_surface_temperature === 'number' ? mcur.sea_surface_temperature : null,
-      tideHeight,
-      tideTrend,
+      at: h.time[idx],
+      pressure, temp, windSpeed, windDir, windUnit, shore,
+      waveHeight: mval('wave_height'),
+      swellHeight: mval('swell_wave_height'),
+      swellDir: mval('swell_wave_direction'),
+      waterTemp: mval('sea_surface_temperature'),
+      tideHeight, tideTrend,
     };
   }
+
+  // Editing without touching the date keeps the entry's original snapshot;
+  // changing the date recomputes it for the new time where possible, and
+  // falls back to the original rather than losing it.
+  const snap = editing && date === originalDate ? entry.weather : buildWeatherSnapshot(date);
+  const snapToSave = snap || (editing ? entry.weather : null);
+  const snapUnit = snap && snap.windUnit === 'mph' ? 'MPH' : 'KN';
 
   async function handleSave() {
     setSaving(true);
     setSaveError(null);
     try {
+      const keep = Math.min(featureIdx, Math.max(0, photos.length - 1));
+      const thumb = photos.length > 0 ? await scaleDataUrl(photos[keep], 240, 0.7) : null;
+      if (activity) localStorage.setItem('lastLogActivity', activity);
       await saveLogEntry({
+        ...(editing ? { id: entry.id } : {}),
         date: new Date(date).toISOString(),
-        locationLabel: location ? location.label : null,
-        lat: location ? location.lat : null,
-        lon: location ? location.lon : null,
-        weather: buildWeatherSnapshot(),
+        locationLabel: editing ? entry.locationLabel : location ? location.label : null,
+        lat: editing ? entry.lat : location ? location.lat : null,
+        lon: editing ? entry.lon : location ? location.lon : null,
+        weather: snapToSave,
+        activity,
+        rating,
         comment,
-        photo,
+        photos,
+        featureIdx: keep,
+        thumb,
       });
       onSaved();
     } catch {
@@ -2829,21 +3096,49 @@ function LogEntryForm({ weather, marine, location, windUnit, onClose, onSaved })
     }
   }
 
-  const snap = buildWeatherSnapshot();
-
   return ReactDOM.createPortal(
     <div className="sheet-backdrop" onClick={onClose}>
       <div className="sheet" style={{ maxHeight: '88vh' }} onClick={(e) => e.stopPropagation()}>
         <div className="sheet-grip" />
         <div className="sheet-title-row">
-          <h2>New Log Entry</h2>
+          <h2>{editing ? 'Edit Log Entry' : 'New Log Entry'}</h2>
           <button className="icon-btn" onClick={onClose} aria-label="Close"><Icon.Close /></button>
         </div>
         <div className="sheet-scroll">
           <div className="card-label" style={{ marginTop: 0 }}>Date</div>
           <input type="datetime-local" className="log-input mono" value={date} onChange={(e) => setDate(e.target.value)} />
 
-          <div className="card-label" style={{ marginTop: 14 }}>Conditions (auto-captured)</div>
+          <div className="card-label" style={{ marginTop: 14 }}>Activity</div>
+          <div className="activity-row">
+            {ACTIVITIES.map((a) => {
+              const A = a.Icon;
+              return (
+                <button
+                  key={a.id}
+                  className={`activity-chip ${activity === a.id ? 'active' : ''}`}
+                  onClick={() => setActivity(activity === a.id ? null : a.id)}
+                >
+                  <A /> {a.label}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="card-label" style={{ marginTop: 14 }}>Conditions rating <span style={{ textTransform: 'none', opacity: 0.7 }}>(optional)</span></div>
+          <div className="rating-row">
+            {[1, 2, 3, 4, 5].map((n) => (
+              <button
+                key={n}
+                className={`rating-dot ${rating != null && n <= rating ? 'on' : ''}`}
+                onClick={() => setRating(rating === n ? null : n)}
+                aria-label={`Rate ${n} of 5`}
+              />
+            ))}
+          </div>
+
+          <div className="card-label" style={{ marginTop: 14 }}>
+            Conditions{snap && snap.at ? ` — at ${new Date(snap.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
+          </div>
           {snap ? (
             <div className="section-body" style={{ paddingLeft: 0, paddingRight: 0, paddingTop: 4 }}>
               <div className="stat"><span className="label">PRESSURE</span><span className="value mono">{snap.pressure.toFixed(0)} hPa</span></div>
@@ -2864,21 +3159,45 @@ function LogEntryForm({ weather, marine, location, windUnit, onClose, onSaved })
                 </div>
               )}
               <div className="wind-block" style={{ gridColumn: '1 / -1' }}>
-                <WindCompass deg={snap.windDir} size={44} />
+                {snap.windDir != null && <WindCompass deg={snap.windDir} size={44} />}
                 <div className="stat">
-                  <span className="label">WIND, FROM {compassLabel(snap.windDir)}</span>
-                  <span className="value mono">{Math.round(snap.windSpeed)} {windUnit === 'mph' ? 'MPH' : 'KN'}</span>
+                  <span className="label">WIND{snap.windDir != null ? `, FROM ${compassLabel(snap.windDir)}` : ''}</span>
+                  <span className="value mono">{Math.round(snap.windSpeed)} {snapUnit}</span>
                 </div>
               </div>
             </div>
           ) : (
-            <p className="empty-hint" style={{ padding: 0 }}>Weather hasn't loaded yet — this entry will save without a conditions snapshot.</p>
+            <p className="empty-hint" style={{ padding: 0 }}>
+              {weather
+                ? 'No conditions data for that date/time — hourly history only goes back 3 days.'
+                : "Weather hasn't loaded yet — this entry will save without a conditions snapshot."}
+            </p>
           )}
 
-          <div className="card-label" style={{ marginTop: 14 }}>Photo</div>
-          <input type="file" accept="image/*" onChange={handleFile} />
+          <div className="card-label" style={{ marginTop: 14 }}>Photos{photos.length > 0 ? ` (${photos.length}/${MAX_LOG_PHOTOS})` : ''}</div>
+          <div className="photo-grid">
+            {photos.map((src, i) => (
+              <div key={i} className={`photo-slot ${i === featureIdx ? 'feature' : ''}`}>
+                <img src={src} alt="" onClick={() => setFeatureIdx(i)} />
+                {i === featureIdx && photos.length > 1 && <span className="feature-badge">★ FEATURE</span>}
+                <button className="photo-remove" onClick={() => removePhoto(i)} aria-label={`Remove photo ${i + 1}`}>
+                  <Icon.Close width={11} height={11} />
+                </button>
+              </div>
+            ))}
+            {photos.length < MAX_LOG_PHOTOS && (
+              <button className="photo-add" onClick={() => fileRef.current && fileRef.current.click()}>
+                <Icon.Camera /> Add
+              </button>
+            )}
+          </div>
+          <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={handleFiles} />
+          {photos.length > 1 && (
+            <p className="empty-hint" style={{ padding: '6px 0 0' }}>
+              Tap a photo to make it the feature picture — it leads the log card and the share image.
+            </p>
+          )}
           {photoError && <p className="empty-hint" style={{ color: 'var(--storm)', padding: '4px 0 0' }}>{photoError}</p>}
-          {photo && <img src={photo} alt="" style={{ width: '100%', borderRadius: 10, marginTop: 8, display: 'block' }} />}
 
           <div className="card-label" style={{ marginTop: 14 }}>Comment</div>
           <textarea className="log-textarea" value={comment} onChange={(e) => setComment(e.target.value)} rows={4} placeholder="How did it go?" />
@@ -2886,7 +3205,7 @@ function LogEntryForm({ weather, marine, location, windUnit, onClose, onSaved })
           {saveError && <p className="empty-hint" style={{ color: 'var(--storm)', padding: '8px 0 0' }}>{saveError}</p>}
 
           <button className="watch-btn" style={{ marginTop: 16, width: '100%' }} disabled={saving} onClick={handleSave}>
-            {saving ? 'Saving…' : 'Save Entry'}
+            {saving ? 'Saving…' : editing ? 'Save Changes' : 'Save Entry'}
           </button>
         </div>
       </div>
@@ -2895,11 +3214,94 @@ function LogEntryForm({ weather, marine, location, windUnit, onClose, onSaved })
   );
 }
 
-function LogEntryCard({ entry, onDelete }) {
+function LogEntryCard({ entry, onOpen }) {
+  const d = new Date(entry.date);
+  const act = ACTIVITIES.find((a) => a.id === entry.activity);
+  const ActIcon = act ? act.Icon : Icon.Log;
+  const w = entry.weather;
+  const bits = [];
+  if (w) {
+    if (w.temp != null) bits.push(`${w.temp.toFixed(0)}°C`);
+    if (w.waterTemp != null) bits.push(`water ${w.waterTemp.toFixed(0)}°C`);
+    if (w.windSpeed != null) bits.push(`${Math.round(w.windSpeed)} ${w.windUnit === 'mph' ? 'mph' : 'kn'}${w.windDir != null ? ' ' + compassLabel(w.windDir) : ''}`);
+    if (w.waveHeight != null) bits.push(`${w.waveHeight.toFixed(1)}m`);
+  }
+  return (
+    <button className="card log-card" onClick={onOpen}>
+      {entry.thumb ? (
+        <div className="log-thumb">
+          <img src={entry.thumb} alt="" />
+          {entry.photoCount > 1 && <span className="photo-count">{entry.photoCount}</span>}
+        </div>
+      ) : (
+        <div className="log-thumb log-thumb-icon"><ActIcon width={22} height={22} /></div>
+      )}
+      <div className="log-card-main">
+        <div className="log-card-top">
+          <span className="name">{entry.locationLabel || 'Unknown location'}</span>
+          {entry.rating != null && <span className="rating-dots">{'●'.repeat(entry.rating)}{'○'.repeat(5 - entry.rating)}</span>}
+        </div>
+        <div className="log-sub mono">
+          {act ? `${act.label} · ` : ''}{d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })} · {d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+        </div>
+        {bits.length > 0 && <div className="log-summary mono">{bits.join(' · ')}</div>}
+        {entry.comment ? <div className="log-comment">{entry.comment.length > 90 ? entry.comment.slice(0, 90) + '…' : entry.comment}</div> : null}
+      </div>
+      <Icon.Chevron style={{ transform: 'rotate(-90deg)', flexShrink: 0, color: 'var(--ink-soft)' }} />
+    </button>
+  );
+}
+
+// Generic destructive-action confirmation — one mis-tap used to delete a
+// logged trip (photos and all) with no way back.
+function ConfirmSheet({ title, message, confirmLabel, onConfirm, onClose }) {
+  const [busy, setBusy] = useState(false);
+  return ReactDOM.createPortal(
+    <div className="sheet-backdrop" onClick={onClose}>
+      <div className="sheet" style={{ maxHeight: '40vh' }} onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-grip" />
+        <div className="sheet-title-row">
+          <h2>{title}</h2>
+          <button className="icon-btn" onClick={onClose} aria-label="Close"><Icon.Close /></button>
+        </div>
+        <p className="empty-hint" style={{ padding: '0 0 14px' }}>{message}</p>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="route-action-btn" onClick={onClose}>Cancel</button>
+          <button
+            className="route-action-btn danger"
+            style={{ background: 'var(--storm)', color: 'var(--panel-raised)', borderColor: 'var(--storm)' }}
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              try { await onConfirm(); } finally { setBusy(false); }
+            }}
+          >
+            {busy ? '…' : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function LogDetailSheet({ entryId, onEdit, onDelete, onClose }) {
+  const [entry, setEntry] = useState(null);
+  const [loadError, setLoadError] = useState(false);
+  const [heroIdx, setHeroIdx] = useState(null);
   const [sharing, setSharing] = useState(false);
   const [shareNote, setShareNote] = useState(null);
 
+  useEffect(() => {
+    fetchLogEntry(entryId).then(setEntry).catch(() => setLoadError(true));
+  }, [entryId]);
+
+  const photos = entry ? entryPhotos(entry) : [];
+  const featureIdx = entry ? Math.min(entry.featureIdx || 0, Math.max(0, photos.length - 1)) : 0;
+  const hIdx = heroIdx != null ? heroIdx : featureIdx;
+
   async function handleShare() {
+    if (!entry) return;
     setSharing(true);
     setShareNote(null);
     try {
@@ -2914,7 +3316,7 @@ function LogEntryCard({ entry, onDelete }) {
         a.download = 'voyage-log.jpg';
         a.click();
         setTimeout(() => URL.revokeObjectURL(url), 3000);
-        setShareNote('Sharing isn\u2019t supported here — downloaded the image instead.');
+        setShareNote('Sharing isn’t supported here — downloaded the image instead.');
       }
     } catch (e) {
       if (e && e.name !== 'AbortError') setShareNote("Couldn't prepare the image to share.");
@@ -2923,42 +3325,87 @@ function LogEntryCard({ entry, onDelete }) {
     }
   }
 
-  const d = new Date(entry.date);
-  return (
-    <div className="card" style={{ display: 'flex', gap: 12 }}>
-      {entry.photo && <img src={entry.photo} alt="" style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 8, flexShrink: 0 }} />}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-          <div>
-            <div style={{ fontWeight: 600, fontSize: 14 }}>{entry.locationLabel || 'Unknown location'}</div>
-            <div className="mono" style={{ fontSize: 11, color: 'var(--ink-soft)' }}>
-              {d.toLocaleDateString()} {d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-            </div>
-          </div>
-          <button className="icon-btn" onClick={onDelete} aria-label="Delete entry"><Icon.Trash /></button>
+  const w = entry && entry.weather;
+  const d = entry && new Date(entry.date);
+  const act = entry && ACTIVITIES.find((a) => a.id === entry.activity);
+
+  return ReactDOM.createPortal(
+    <div className="sheet-backdrop" onClick={onClose}>
+      <div className="sheet" style={{ maxHeight: '88vh' }} onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-grip" />
+        <div className="sheet-title-row">
+          <h2>{entry ? entry.locationLabel || 'Voyage log' : 'Voyage log'}</h2>
+          <button className="icon-btn" onClick={onClose} aria-label="Close"><Icon.Close /></button>
         </div>
-        {entry.weather && (
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 6 }}>
-            {entry.weather.windDir != null && <WindCompass deg={entry.weather.windDir} size={30} />}
-            <div className="mono" style={{ fontSize: 11, color: 'var(--ink-soft)', lineHeight: 1.5 }}>
-              {entry.weather.pressure.toFixed(0)} hPa · {entry.weather.temp.toFixed(0)}°C
-              {entry.weather.waterTemp != null ? ` · water ${entry.weather.waterTemp.toFixed(0)}°C` : ''}
-              <br />
-              {Math.round(entry.weather.windSpeed)} {entry.weather.windUnit === 'mph' ? 'MPH' : 'KN'} {entry.weather.windDir != null ? compassLabel(entry.weather.windDir) : ''}{entry.weather.shore ? ` (${entry.weather.shore})` : ''}
-              {entry.weather.waveHeight != null ? ` · ${entry.weather.waveHeight.toFixed(1)}m waves` : ''}
-              {entry.weather.swellHeight != null ? ` · ${entry.weather.swellHeight.toFixed(1)}m swell` : ''}
-              {entry.weather.tideHeight != null ? <br /> : ''}
-              {entry.weather.tideHeight != null ? `Tide ${entry.weather.tideHeight.toFixed(1)}m${entry.weather.tideTrend ? `, ${entry.weather.tideTrend}` : ''} (modeled)` : ''}
-            </div>
-          </div>
-        )}
-        {entry.comment && <div style={{ fontSize: 13, marginTop: 6 }}>{entry.comment}</div>}
-        <button className="mono" style={{ fontSize: 12, color: 'var(--accent)', marginTop: 8, fontWeight: 600, padding: 0 }} onClick={handleShare} disabled={sharing}>
-          {sharing ? 'Preparing…' : 'Share'}
-        </button>
-        {shareNote && <div className="empty-hint" style={{ padding: '4px 0 0' }}>{shareNote}</div>}
+        <div className="sheet-scroll">
+          {loadError ? (
+            <p className="empty-hint">Couldn't load this entry — check your connection and try again.</p>
+          ) : !entry ? (
+            <p className="empty-hint">Loading…</p>
+          ) : (
+            <React.Fragment>
+              <div className="mono" style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 10 }}>
+                {act ? `${act.label} · ` : ''}
+                {d.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} · {d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                {entry.rating ? ` · ${'●'.repeat(entry.rating)}${'○'.repeat(5 - entry.rating)}` : ''}
+              </div>
+
+              {photos.length > 0 && (
+                <React.Fragment>
+                  <img className="detail-hero" src={photos[hIdx]} alt="" />
+                  {photos.length > 1 && (
+                    <div className="detail-thumbs">
+                      {photos.map((p, i) => (
+                        <img key={i} src={p} alt="" className={i === hIdx ? 'active' : ''} onClick={() => setHeroIdx(i)} />
+                      ))}
+                    </div>
+                  )}
+                </React.Fragment>
+              )}
+
+              {w && (
+                <div className="section-body" style={{ padding: '14px 0 0' }}>
+                  <div className="stat"><span className="label">PRESSURE</span><span className="value mono">{w.pressure.toFixed(0)} hPa</span></div>
+                  <div className="stat"><span className="label">TEMP</span><span className="value mono">{w.temp.toFixed(0)}°C</span></div>
+                  {w.waterTemp != null && <div className="stat"><span className="label">WATER TEMP</span><span className="value mono">{w.waterTemp.toFixed(0)}°C</span></div>}
+                  {w.shore && <div className="stat"><span className="label">SHORE</span><span className="value">{w.shore}</span></div>}
+                  {w.waveHeight != null && <div className="stat"><span className="label">WAVE</span><span className="value mono">{w.waveHeight.toFixed(1)} m</span></div>}
+                  {w.swellHeight != null && (
+                    <div className="stat">
+                      <span className="label">SWELL</span>
+                      <span className="value mono">{w.swellHeight.toFixed(1)} m{w.swellDir != null ? ` ${compassLabel(w.swellDir)}` : ''}</span>
+                    </div>
+                  )}
+                  {w.tideHeight != null && (
+                    <div className="stat">
+                      <span className="label">TIDE (MODELED)</span>
+                      <span className="value mono">{w.tideHeight.toFixed(1)} m{w.tideTrend ? `, ${w.tideTrend}` : ''}</span>
+                    </div>
+                  )}
+                  <div className="wind-block" style={{ gridColumn: '1 / -1' }}>
+                    {w.windDir != null && <WindCompass deg={w.windDir} size={44} />}
+                    <div className="stat">
+                      <span className="label">WIND{w.windDir != null ? `, FROM ${compassLabel(w.windDir)}` : ''}</span>
+                      <span className="value mono">{w.windSpeed != null ? `${Math.round(w.windSpeed)} ${w.windUnit === 'mph' ? 'MPH' : 'KN'}` : '—'}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {entry.comment && <div style={{ fontSize: 14, marginTop: 12, lineHeight: 1.5 }}>{entry.comment}</div>}
+              {shareNote && <div className="empty-hint" style={{ padding: '8px 0 0' }}>{shareNote}</div>}
+
+              <div className="detail-actions">
+                <button className="route-action-btn" onClick={handleShare} disabled={sharing}>{sharing ? 'Preparing…' : 'Share'}</button>
+                <button className="route-action-btn" onClick={() => onEdit(entry)}>Edit</button>
+                <button className="route-action-btn danger" onClick={() => onDelete(entry)}>Delete</button>
+              </div>
+            </React.Fragment>
+          )}
+        </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -2966,6 +3413,10 @@ function LogView({ weather, marine, location, windUnit }) {
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [formOpen, setFormOpen] = useState(false);
+  const [editEntry, setEditEntry] = useState(null); // full entry being edited
+  const [detailId, setDetailId] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(null);
+  const [filter, setFilter] = useState('all');
 
   async function refresh() {
     try {
@@ -2979,9 +3430,26 @@ function LogView({ weather, marine, location, windUnit }) {
     fetchLogEntries().then(setEntries).catch(() => {}).finally(() => setLoading(false));
   }, []);
 
-  async function removeEntry(id) {
-    await deleteLogEntry(id);
-    refresh();
+  const filtered = filter === 'all' ? entries : entries.filter((e) => (e.activity || 'other') === filter);
+
+  const yearNow = new Date().getFullYear();
+  const yearCount = entries.filter((e) => new Date(e.date).getFullYear() === yearNow).length;
+  let latestWater = null;
+  for (const e of entries) {
+    if (e.weather && e.weather.waterTemp != null) { latestWater = e.weather.waterTemp; break; }
+  }
+
+  // Group by month for scannable history — entries arrive newest-first.
+  const groups = [];
+  for (const e of filtered) {
+    const d = new Date(e.date);
+    const key = `${d.getFullYear()}-${d.getMonth()}`;
+    const last = groups[groups.length - 1];
+    if (!last || last.key !== key) {
+      groups.push({ key, label: d.toLocaleDateString([], { month: 'long', year: 'numeric' }), items: [e] });
+    } else {
+      last.items.push(e);
+    }
   }
 
   return (
@@ -2989,25 +3457,74 @@ function LogView({ weather, marine, location, windUnit }) {
       <div style={{ padding: '14px 14px 4px' }}>
         <button className="watch-btn" style={{ width: '100%' }} onClick={() => setFormOpen(true)}>+ New Log Entry</button>
       </div>
+
+      {entries.length > 0 && (
+        <div className="stats-strip">
+          <div className="stat"><span className="label">TRIPS</span><span className="value mono">{entries.length}</span></div>
+          <div className="stat"><span className="label">THIS YEAR</span><span className="value mono">{yearCount}</span></div>
+          {latestWater != null && <div className="stat"><span className="label">LAST WATER</span><span className="value mono">{latestWater.toFixed(0)}°C</span></div>}
+        </div>
+      )}
+
+      {entries.length > 0 && (
+        <div className="day-tabs" style={{ padding: '10px 14px 0' }}>
+          <button className={`day-tab ${filter === 'all' ? 'active' : ''}`} onClick={() => setFilter('all')}>All</button>
+          {ACTIVITIES.map((a) => (
+            <button key={a.id} className={`day-tab ${filter === a.id ? 'active' : ''}`} onClick={() => setFilter(a.id)}>{a.label}</button>
+          ))}
+        </div>
+      )}
+
       {loading ? (
         <p className="empty-hint" style={{ padding: 24 }}>Loading log…</p>
       ) : entries.length === 0 ? (
         <p className="empty-hint" style={{ padding: 24 }}>No entries yet — log a trip once you're back.</p>
+      ) : filtered.length === 0 ? (
+        <p className="empty-hint" style={{ padding: 24 }}>No entries for this activity yet.</p>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '10px 14px 14px' }}>
-          {entries.map((e) => (
-            <LogEntryCard key={e.id} entry={e} onDelete={() => removeEntry(e.id)} />
-          ))}
-        </div>
+        groups.map((g) => (
+          <React.Fragment key={g.key}>
+            <div className="month-header">{g.label}</div>
+            {g.items.map((e) => (
+              <LogEntryCard key={e.id} entry={e} onOpen={() => setDetailId(e.id)} />
+            ))}
+          </React.Fragment>
+        ))
       )}
-      {formOpen && (
+
+      {(formOpen || editEntry) && (
         <LogEntryForm
           weather={weather}
           marine={marine}
           location={location}
           windUnit={windUnit}
-          onClose={() => setFormOpen(false)}
-          onSaved={() => { setFormOpen(false); refresh(); }}
+          entry={editEntry}
+          onClose={() => { setFormOpen(false); setEditEntry(null); }}
+          onSaved={() => { setFormOpen(false); setEditEntry(null); refresh(); }}
+        />
+      )}
+
+      {detailId && (
+        <LogDetailSheet
+          entryId={detailId}
+          onEdit={(full) => { setDetailId(null); setEditEntry(full); }}
+          onDelete={(full) => setConfirmDelete(full)}
+          onClose={() => setDetailId(null)}
+        />
+      )}
+
+      {confirmDelete && (
+        <ConfirmSheet
+          title="Delete this entry?"
+          message={`"${confirmDelete.locationLabel || 'This trip'}" and its photos will be permanently deleted.`}
+          confirmLabel="Delete"
+          onConfirm={async () => {
+            await deleteLogEntry(confirmDelete.id);
+            setConfirmDelete(null);
+            setDetailId(null);
+            refresh();
+          }}
+          onClose={() => setConfirmDelete(null)}
         />
       )}
     </div>

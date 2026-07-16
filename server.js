@@ -307,11 +307,37 @@ app.get('/api/log-entries', async (req, res) => {
     const entries = rows
       .map((r) => { try { return JSON.parse(r.value); } catch { return null; } })
       .filter(Boolean)
+      // List payload: strip the full-size photos and send only a thumbnail
+      // — with base64 photos inline, the old everything-response grew
+      // without bound as the log filled up. The detail view fetches the
+      // complete entry by id. Legacy entries without a stored thumb fall
+      // back to their full photo, so nothing disappears.
+      .map((e) => {
+        const { photos, photo, ...light } = e;
+        light.thumb = e.thumb || (Array.isArray(photos) && photos[0]) || photo || null;
+        light.photoCount = Array.isArray(photos) ? photos.length : photo ? 1 : 0;
+        return light;
+      })
       .sort((a, b) => new Date(b.date) - new Date(a.date));
     res.json(entries);
   } catch (err) {
     console.error('GET /api/log-entries failed', err);
     res.status(500).json({ error: 'Could not load log entries' });
+  }
+});
+
+app.get('/api/log-entries/:id', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT value FROM kv_store WHERE key = $1', [`log:${req.params.id}`]);
+    if (rows.length === 0) return res.status(404).json({ error: 'Entry not found' });
+    try {
+      res.json(JSON.parse(rows[0].value));
+    } catch {
+      res.status(500).json({ error: 'Entry is corrupt' });
+    }
+  } catch (err) {
+    console.error('GET /api/log-entries/:id failed', err);
+    res.status(500).json({ error: 'Could not load log entry' });
   }
 });
 
