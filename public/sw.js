@@ -54,11 +54,14 @@ function cacheable(res) {
   return res && (res.ok || res.type === 'opaque');
 }
 
-function networkFirst(request, cacheName) {
+// skipRedirected: with Cloudflare Access in front of the app, an expired
+// session turns same-origin requests into redirects to the Access login
+// page — that must never be cached as if it were the app shell or data.
+function networkFirst(request, cacheName, skipRedirected) {
   return caches.open(cacheName).then((cache) =>
     fetch(request)
       .then((res) => {
-        if (cacheable(res)) cache.put(request, res.clone());
+        if (cacheable(res) && !(skipRedirected && res.redirected)) cache.put(request, res.clone());
         return res;
       })
       .catch(() =>
@@ -95,14 +98,14 @@ self.addEventListener('fetch', (event) => {
   // App navigations and same-origin static files → shell cache.
   if (url.origin === self.location.origin) {
     if (request.mode === 'navigate') {
-      event.respondWith(networkFirst(new Request('/'), SHELL_CACHE));
+      event.respondWith(networkFirst(new Request('/'), SHELL_CACHE, true));
       return;
     }
     if (url.pathname.startsWith('/api/')) {
-      event.respondWith(networkFirst(request, DATA_CACHE));
+      event.respondWith(networkFirst(request, DATA_CACHE, true));
       return;
     }
-    event.respondWith(networkFirst(request, SHELL_CACHE));
+    event.respondWith(networkFirst(request, SHELL_CACHE, true));
     return;
   }
 
