@@ -21,6 +21,13 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
 
+// An error on an idle pooled client is emitted on the pool itself — left
+// unhandled it's an uncaught 'error' event, which takes the whole process
+// down (e.g. when the Postgres container restarts underneath us).
+pool.on('error', (err) => {
+  console.error('Unexpected error on idle Postgres client', err);
+});
+
 const DEFAULT_STATE = {
   locations: [],
   activeLocationId: null,
@@ -50,7 +57,17 @@ async function setState(state) {
 // compressed photo attached — the frontend downsizes images before
 // sending, but still needs headroom beyond the default.
 app.use(express.json({ limit: '8mb' }));
-app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
+app.use(express.static(path.join(__dirname, 'public'), {
+  extensions: ['html'],
+  setHeaders: (res, filePath) => {
+    // no-cache = revalidate before use, not "don't store". iOS Safari is
+    // aggressive about heuristic caching for PWAs; the entry point and the
+    // service worker must always be revalidated or deploys never arrive.
+    if (filePath.endsWith('index.html') || filePath.endsWith('sw.js')) {
+      res.setHeader('Cache-Control', 'no-cache');
+    }
+  },
+}));
 
 // --- API ------------------------------------------------------------------
 

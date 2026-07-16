@@ -7,7 +7,11 @@ services:
       PORT: 3000
       DATABASE_URL: postgres://barometer:${POSTGRES_PASSWORD}@barometer-db:5432/barometer
       ADMIRALTY_API_KEY: ${ADMIRALTY_API_KEY}
-      BUILD_ID: ${BUILD_ID:-dev}
+      # No default here — the old `${BUILD_ID:-dev}` pinned the version to
+      # the literal string "dev" forever, so the frontend's force-reload-
+      # on-deploy check never fired. Left empty, server.js falls back to
+      # process start time, so every `up -d --build` counts as new.
+      BUILD_ID: ${BUILD_ID:-}
     ports:
       # CHANGE 4300 to an unused port on Byte before first deploy —
       # check with: ss -tlnp | grep LISTEN

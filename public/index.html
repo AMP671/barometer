@@ -571,6 +571,16 @@
 <body>
 <div id="root"></div>
 
+<script>
+// Offline support — the SW caches the app shell, pinned CDN deps, and the
+// last good data responses (never Admiralty tide predictions; see sw.js).
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  });
+}
+</script>
+
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.7/babel.min.js"></script>
@@ -777,6 +787,25 @@ function moonPhase(date) {
   return { frac, name: names[idx] };
 }
 
+// Open-Meteo's `current.time` has 15-minute resolution (e.g. "…T08:45")
+// but the hourly arrays are on the hour, so a plain indexOf misses 3 out
+// of every 4 quarter-hours. The old fallback (end of array) silently
+// pointed the trend chart at the END of the 7-day forecast instead of the
+// past 24h. Match on the truncated hour first, then the last hourly slot
+// not after now; -1 only if every hourly time is in the future.
+function findNowIndex(times, nowIso) {
+  if (!Array.isArray(times) || times.length === 0 || !nowIso) return -1;
+  const hourIso = nowIso.slice(0, 13) + ':00';
+  const exact = times.indexOf(hourIso);
+  if (exact !== -1) return exact;
+  let idx = -1;
+  for (let i = 0; i < times.length; i++) {
+    if (times[i] <= nowIso) idx = i;
+    else break;
+  }
+  return idx;
+}
+
 function relativeTime(date) {
   if (!date) return '—';
   const mins = Math.round((Date.now() - date.getTime()) / 60000);
@@ -873,7 +902,9 @@ function downloadGPX(waypoints, closed, name) {
   a.href = url;
   a.download = `${(name || 'route').replace(/[^a-z0-9-_]/gi, '_')}.gpx`;
   a.click();
-  URL.revokeObjectURL(url);
+  // Deferred — revoking synchronously after click() has aborted downloads
+  // on iOS Safari before the fetch of the blob URL actually starts.
+  setTimeout(() => URL.revokeObjectURL(url), 3000);
 }
 
 // Resizes/compresses a photo client-side before it ever reaches the
@@ -1049,7 +1080,9 @@ async function searchAllPlaces(query) {
   const seen = new Set();
   return [...places, ...features].filter((p) => {
     if (typeof p.lat !== 'number' || typeof p.lon !== 'number' || Number.isNaN(p.lat) || Number.isNaN(p.lon)) return false;
-    const key = `${p.lat.toFixed(2)},${p.lon.toFixed(2)}`;
+    // 3 decimals ≈ 110m — at 2 decimals (~1.1km) two genuinely distinct
+    // neighbouring coves were collapsing into one result.
+    const key = `${p.lat.toFixed(3)},${p.lon.toFixed(3)}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -1458,14 +1491,17 @@ function WindCompass({ deg, size = 50 }) {
 
 function MoonGlyph({ frac }) {
   const size = 26, r = 11, cx = size / 2, cy = size / 2;
+  // Per-instance clip id — a fixed one collides if two glyphs ever render
+  // at once, and SVG resolves url(#…) against the first match in the page.
+  const clipId = useRef(`moonclip_${Math.random().toString(36).slice(2, 8)}`).current;
   const shift = (frac <= 0.5 ? (0.5 - frac) : (frac - 0.5)) * 4 * r;
   const rx = Math.max(0.001, r - shift);
   const lit = frac <= 0.5;
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ flexShrink: 0 }}>
       <circle cx={cx} cy={cy} r={r} fill="var(--ink)" opacity="0.85" />
-      <clipPath id="moonclip"><circle cx={cx} cy={cy} r={r} /></clipPath>
-      <g clipPath="url(#moonclip)">
+      <clipPath id={clipId}><circle cx={cx} cy={cy} r={r} /></clipPath>
+      <g clipPath={`url(#${clipId})`}>
         <ellipse cx={lit ? cx + (r - shift) : cx - (r - shift)} cy={cy} rx={rx} ry={r} fill="var(--panel-raised)" />
       </g>
     </svg>
@@ -1541,6 +1577,9 @@ function LocationSheet({ favourites, activeFavouriteId, tempLocation, windUnit, 
   const [editValue, setEditValue] = useState('');
   const [saveNameValue, setSaveNameValue] = useState(tempLocation ? tempLocation.label : '');
   const debounceRef = useRef(null);
+  // Monotonic id per search, so a slow earlier query resolving late can't
+  // overwrite the results of the query the user actually typed last.
+  const searchSeqRef = useRef(0);
 
   useEffect(() => {
     setSaveNameValue(tempLocation ? tempLocation.label : '');
@@ -1550,13 +1589,15 @@ function LocationSheet({ favourites, activeFavouriteId, tempLocation, windUnit, 
     clearTimeout(debounceRef.current);
     if (query.trim().length < 2) { setResults([]); return; }
     debounceRef.current = setTimeout(async () => {
+      const seq = ++searchSeqRef.current;
       setSearching(true);
       try {
-        setResults(await searchAllPlaces(query.trim()));
+        const found = await searchAllPlaces(query.trim());
+        if (seq === searchSeqRef.current) setResults(found);
       } catch {
-        setResults([]);
+        if (seq === searchSeqRef.current) setResults([]);
       } finally {
-        setSearching(false);
+        if (seq === searchSeqRef.current) setSearching(false);
       }
     }, 400);
     return () => clearTimeout(debounceRef.current);
@@ -1723,14 +1764,22 @@ function TideSection({ location, tideStations, marine, currentTime }) {
   const nearestAny = useMemo(() => {
     if (!location || !tideStations || tideStations.length === 0) return null;
     return nearestStation(tideStations, location.lat, location.lon, Infinity);
-  }, [location, tideStations]);
+    // Keyed on coordinates, not the location object, so patching an
+    // unrelated field on the location doesn't recompute (and refetch).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location && location.lat, location && location.lon, tideStations]);
   const station = nearestAny && nearestAny.distanceKm <= TIDE_STATION_MAX_KM ? nearestAny : null;
 
+  // Refetch only when the resolved STATION changes — predictions are
+  // station-based, so moving within the same station's range needs no new
+  // call (which matters: Admiralty's free tier is quota-capped and its
+  // terms bar us from caching the response).
+  const stationId = station ? station.id : null;
   useEffect(() => {
-    if (!station) { setEvents(null); return; }
+    if (!stationId) { setEvents(null); return; }
     setLoadError(false);
-    fetchTideEvents(station.id).then(setEvents).catch(() => setLoadError(true));
-  }, [station]);
+    fetchTideEvents(stationId).then(setEvents).catch(() => setLoadError(true));
+  }, [stationId]);
 
   useEffect(() => { setDayIdx(0); }, [events]);
 
@@ -1756,7 +1805,7 @@ function TideSection({ location, tideStations, marine, currentTime }) {
                 <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderTop: i > 0 ? '1px solid var(--line)' : 'none' }}>
                   <span style={{ fontSize: 14 }}>{e.EventType === 'HighWater' ? 'High Water' : 'Low Water'}</span>
                   <span className="mono" style={{ fontSize: 14 }}>
-                    {parseAdmiraltyTime(e.DateTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {e.Height.toFixed(1)} m
+                    {parseAdmiraltyTime(e.DateTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {e.Height != null ? `${e.Height.toFixed(1)} m` : '— m'}
                   </span>
                 </div>
               ))}
@@ -1770,23 +1819,20 @@ function TideSection({ location, tideStations, marine, currentTime }) {
     );
   }
 
-  if (station && loadError) {
-    return (
-      <div className="empty-hint" style={{ margin: '0 14px 10px' }}>
-        Couldn't load official tide data for {station.name} ({station.distanceKm.toFixed(0)} km away) right now — this can happen if a specific station has limited source data at Admiralty's end, not necessarily a connection problem.
-      </div>
-    );
-  }
-
-  // Fallback: modeled sea-level curve from Open-Meteo, wherever there's no
-  // nearby Admiralty station (outside UK/Ireland, or no key configured).
+  // Fallback: modeled sea-level curve from Open-Meteo — wherever there's
+  // no nearby Admiralty station (outside UK/Ireland, or no key configured),
+  // and also when the official station's data failed to load (offline, or
+  // a station with limited source data at Admiralty's end). Better a
+  // clearly-labeled modeled curve than no tide card at all.
   const hasTide = marine && marine.hourly && Array.isArray(marine.hourly.sea_level_height_msl);
 
-  const diagnostic = !tideStations || tideStations.length === 0
-    ? "Official station list didn't load — check the Admiralty API key on the server."
-    : nearestAny
-      ? `Nearest official station: ${nearestAny.name}, ${nearestAny.distanceKm.toFixed(0)} km away (outside the ${TIDE_STATION_MAX_KM} km range used here).`
-      : null;
+  const diagnostic = station && loadError
+    ? `Couldn't load official data for ${station.name} right now — showing the modeled curve instead.`
+    : !tideStations || tideStations.length === 0
+      ? "Official station list didn't load — check the Admiralty API key on the server."
+      : nearestAny
+        ? `Nearest official station: ${nearestAny.name}, ${nearestAny.distanceKm.toFixed(0)} km away (outside the ${TIDE_STATION_MAX_KM} km range used here).`
+        : null;
 
   if (!hasTide) {
     return diagnostic ? <div className="empty-hint" style={{ margin: '0 14px 10px' }}>{diagnostic}</div> : null;
@@ -1794,8 +1840,8 @@ function TideSection({ location, tideStations, marine, currentTime }) {
 
   const tTimes = marine.hourly.time;
   const tHeights = marine.hourly.sea_level_height_msl;
-  let tIdx = tTimes.indexOf(currentTime);
-  if (tIdx === -1) tIdx = Math.min(tTimes.length - 1, Math.floor(tTimes.length / 2));
+  let tIdx = findNowIndex(tTimes, currentTime);
+  if (tIdx === -1) tIdx = 0;
   const tideNow = tHeights[tIdx];
   const tPrev = tHeights[Math.max(0, tIdx - 1)];
   const tideTrend = tideNow > tPrev ? 'rising' : tideNow < tPrev ? 'falling' : 'steady';
@@ -1889,7 +1935,12 @@ function ForecastSection({ weather, marine, windUnit, seaward }) {
   // slice every daily field to actually start from today, rather than
   // assuming index 0. This was the root cause of a crash when switching
   // to a new location: an unguarded null at the misaligned boundary day.
-  const todayStr = new Date().toISOString().slice(0, 10);
+  // Built from LOCAL date parts, not toISOString() — that's the UTC date,
+  // and daily.time is location-local, so during BST the hour after 11pm
+  // used to label yesterday as "Today".
+  const nowD = new Date();
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const todayStr = `${nowD.getFullYear()}-${pad2(nowD.getMonth() + 1)}-${pad2(nowD.getDate())}`;
   let offset = rawDaily.time.indexOf(todayStr);
   if (offset === -1) offset = 0;
   function sliceFromToday(d) {
@@ -1971,8 +2022,8 @@ function GaugeView({ weather, marine, windUnit, location, tideStations, onUpdate
   const hourly = weather.hourly;
   const times = hourly.time;
   const nowIso = cur.time;
-  let nowIdx = times.indexOf(nowIso);
-  if (nowIdx === -1) nowIdx = times.length - 1;
+  let nowIdx = findNowIndex(times, nowIso);
+  if (nowIdx === -1) nowIdx = 0;
   const prevIdx = Math.max(0, nowIdx - 3);
   const delta = hourly.pressure_msl[nowIdx] - hourly.pressure_msl[prevIdx];
   const trend = classifyTrend(delta);
@@ -2048,8 +2099,7 @@ function GaugeView({ weather, marine, windUnit, location, tideStations, onUpdate
                 <span className="label">WIND, FROM {compassLabel(cur.wind_direction_10m)}</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6 }}>
-                <SevenSegDigit char={String(windDisplay).padStart(2,'0')[0]} size={22} />
-                <SevenSegDigit char={String(windDisplay).padStart(2,'0')[1]} size={22} />
+                <SevenSegDisplay value={String(windDisplay).padStart(2, '0')} size={22} />
                 <span className="lcd-unit" style={{ color: 'var(--ink-soft)', fontSize: 11 }}>{windUnitLabel}</span>
               </div>
               <div style={{ fontSize: 11, color: 'var(--ink-soft)', marginTop: 4, fontFamily: "'IBM Plex Mono', monospace" }}>
@@ -2179,8 +2229,13 @@ function MapView({ location }) {
     }
   }, [location]);
 
+  // One effect keyed on coordinates: build the map, load isobars, and tear
+  // it all down again on unmount or location change. Leaflet maps that are
+  // never .remove()d leak the instance plus a window resize listener every
+  // time this tab is left — and the previous two-effect split here also
+  // double-fired loadIsobars on first mount.
   useEffect(() => {
-    if (!location || leafletRef.current) return;
+    if (!location) return;
     const map = L.map(mapRef.current, { zoomControl: true }).setView([location.lat, location.lon], 5);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap contributors',
@@ -2193,15 +2248,13 @@ function MapView({ location }) {
     L.marker([location.lat, location.lon]).addTo(map);
     leafletRef.current = map;
     loadIsobars();
-  }, [location, loadIsobars]);
-
-  useEffect(() => {
-    if (leafletRef.current && location) {
-      leafletRef.current.setView([location.lat, location.lon], leafletRef.current.getZoom());
-      loadIsobars();
-    }
+    return () => {
+      map.remove();
+      leafletRef.current = null;
+      contourLayerRef.current = null;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location]);
+  }, [location && location.lat, location && location.lon]);
 
   return (
     <div className="view map-view">
@@ -2219,9 +2272,10 @@ function MapView({ location }) {
 --------------------------------------------------------------------- */
 const KN_TO_KMH = 1.852;
 
-function RouteSaveSheet({ onSave, onClose }) {
-  const [name, setName] = useState('');
+function RouteSaveSheet({ initialName, onSave, onClose }) {
+  const [name, setName] = useState(initialName || '');
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
   return ReactDOM.createPortal(
     <div className="sheet-backdrop" onClick={onClose}>
       <div className="sheet" style={{ maxHeight: '50vh' }} onClick={(e) => e.stopPropagation()}>
@@ -2237,11 +2291,23 @@ function RouteSaveSheet({ onSave, onClose }) {
           onChange={(e) => setName(e.target.value)}
           autoFocus
         />
+        {error && <p className="empty-hint" style={{ color: 'var(--storm)', padding: '8px 0 0' }}>{error}</p>}
         <button
           className="watch-btn"
           style={{ width: '100%', marginTop: 12 }}
           disabled={saving}
-          onClick={async () => { setSaving(true); await onSave(name.trim() || 'Unnamed route'); }}
+          onClick={async () => {
+            setSaving(true);
+            setError(null);
+            try {
+              await onSave(name.trim() || 'Unnamed route');
+            } catch {
+              // Without this, a failed save left the button stuck on
+              // "Saving…" with no way out short of closing the sheet.
+              setError("Couldn't save — check your connection and try again.");
+              setSaving(false);
+            }
+          }}
         >
           {saving ? 'Saving…' : 'Save'}
         </button>
@@ -2297,7 +2363,10 @@ function RouteLoadSheet({ onLoad, onClose }) {
 
 function RouteView({ location, marine, windUnit }) {
   const mapRef = useRef(null);
-  const leafletRef = useRef(null);
+  // The map lives in state (not a ref) so the waypoint/position effects
+  // below re-run once it exists — with a ref they'd silently no-op if they
+  // ran before the map was created.
+  const [mapObj, setMapObj] = useState(null);
   const layerRef = useRef(null);
   const myMarkerRef = useRef(null);
   const rowRefs = useRef({});
@@ -2305,6 +2374,9 @@ function RouteView({ location, marine, windUnit }) {
   const [waypoints, setWaypoints] = useState([]);
   const [plannedSpeed, setPlannedSpeed] = useState(3);
   const [closed, setClosed] = useState(false);
+  // Remembered from save/load so the GPX export and re-saves keep the
+  // route's actual name instead of a generic "route".
+  const [routeName, setRouteName] = useState('');
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   const [tracking, setTracking] = useState(false);
   const [myPosition, setMyPosition] = useState(null);
@@ -2315,10 +2387,10 @@ function RouteView({ location, marine, windUnit }) {
   // Leaflet doesn't notice CSS-driven container resizes on its own — tell
   // it to remeasure after the panel's collapse/expand transition finishes.
   useEffect(() => {
-    if (!leafletRef.current) return;
-    const t = setTimeout(() => leafletRef.current.invalidateSize(), 280);
+    if (!mapObj) return;
+    const t = setTimeout(() => mapObj.invalidateSize(), 280);
     return () => clearTimeout(t);
-  }, [panelCollapsed]);
+  }, [mapObj, panelCollapsed]);
 
   // Live tracking is foreground-only — iOS suspends background web apps,
   // same limitation as everything else in this app that's tried to use
@@ -2343,18 +2415,18 @@ function RouteView({ location, marine, windUnit }) {
   useEffect(() => () => { if (watchIdRef.current != null) navigator.geolocation.clearWatch(watchIdRef.current); }, []);
 
   useEffect(() => {
-    if (!leafletRef.current) return;
-    if (myMarkerRef.current) { leafletRef.current.removeLayer(myMarkerRef.current); myMarkerRef.current = null; }
+    if (!mapObj) return;
+    if (myMarkerRef.current) { mapObj.removeLayer(myMarkerRef.current); myMarkerRef.current = null; }
     if (myPosition) {
       myMarkerRef.current = L.circleMarker([myPosition.lat, myPosition.lon], {
         radius: 8, color: '#A23E32', fillColor: '#A23E32', fillOpacity: 0.9, weight: 2,
-      }).addTo(leafletRef.current);
+      }).addTo(mapObj);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [myPosition]);
+  }, [mapObj, myPosition]);
 
   useEffect(() => {
-    if (!location || leafletRef.current) return;
+    if (!location) return;
     const map = L.map(mapRef.current, { zoomControl: true }).setView([location.lat, location.lon], 12);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap contributors',
@@ -2371,9 +2443,17 @@ function RouteView({ location, marine, windUnit }) {
       setClosed(false);
       setWaypoints((wp) => [...wp, { lat: e.latlng.lat, lon: e.latlng.lng }]);
     });
-    leafletRef.current = map;
+    setMapObj(map);
+    // Tear down on unmount/location change — an un-removed Leaflet map
+    // leaks the instance and a window resize listener per tab visit.
+    return () => {
+      map.remove();
+      setMapObj(null);
+      layerRef.current = null;
+      myMarkerRef.current = null;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location]);
+  }, [location && location.lat, location && location.lon]);
 
   function removeWaypoint(index) {
     setWaypoints((wp) => {
@@ -2391,8 +2471,8 @@ function RouteView({ location, marine, windUnit }) {
   }
 
   useEffect(() => {
-    if (!leafletRef.current) return;
-    if (layerRef.current) leafletRef.current.removeLayer(layerRef.current);
+    if (!mapObj) return;
+    if (layerRef.current) mapObj.removeLayer(layerRef.current);
     const group = L.layerGroup();
     const trashSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#F0DDAE" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6M14 11v6"></path></svg>';
     waypoints.forEach((wp, i) => {
@@ -2427,10 +2507,10 @@ function RouteView({ location, marine, windUnit }) {
       if (closed) linePts.push([waypoints[0].lat, waypoints[0].lon]);
       L.polyline(linePts, { color: '#211A0F', weight: 2.5, dashArray: '6 5' }).addTo(group);
     }
-    group.addTo(leafletRef.current);
+    group.addTo(mapObj);
     layerRef.current = group;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [waypoints, closed]);
+  }, [mapObj, waypoints, closed]);
 
   const legs = [];
   for (let i = 0; i < waypoints.length - 1; i++) {
@@ -2491,7 +2571,7 @@ function RouteView({ location, marine, windUnit }) {
           {waypoints.length > 1 && (
             <button className="icon-btn" onClick={() => setWaypoints((wp) => [...wp].reverse())} aria-label="Reverse route"><Icon.Reverse /></button>
           )}
-          <button className="icon-btn" onClick={() => { setWaypoints([]); setClosed(false); }} aria-label="Clear route"><Icon.Trash /></button>
+          <button className="icon-btn" onClick={() => { setWaypoints([]); setClosed(false); setRouteName(''); }} aria-label="Clear route"><Icon.Trash /></button>
         </div>
         {!panelCollapsed && (
         <React.Fragment>
@@ -2585,7 +2665,7 @@ function RouteView({ location, marine, windUnit }) {
         <div className="route-actions">
           <button className="route-action-btn" onClick={() => setSaveOpen(true)} disabled={waypoints.length < 2}>Save Route</button>
           <button className="route-action-btn" onClick={() => setLoadOpen(true)}>Load Route</button>
-          <button className="route-action-btn" onClick={() => downloadGPX(waypoints, closed, 'route')} disabled={waypoints.length < 2}>Export GPX</button>
+          <button className="route-action-btn" onClick={() => downloadGPX(waypoints, closed, routeName || 'route')} disabled={waypoints.length < 2}>Export GPX</button>
         </div>
         </React.Fragment>
         )}
@@ -2593,8 +2673,10 @@ function RouteView({ location, marine, windUnit }) {
 
       {saveOpen && (
         <RouteSaveSheet
+          initialName={routeName}
           onSave={async (name) => {
             await saveRouteApi({ name, waypoints, closed, plannedSpeed, windUnit });
+            setRouteName(name);
             setSaveOpen(false);
           }}
           onClose={() => setSaveOpen(false)}
@@ -2605,6 +2687,7 @@ function RouteView({ location, marine, windUnit }) {
           onLoad={(route) => {
             setWaypoints(route.waypoints);
             setClosed(!!route.closed);
+            setRouteName(route.name || '');
             if (route.plannedSpeed) setPlannedSpeed(route.plannedSpeed);
             setLoadOpen(false);
           }}
@@ -2655,9 +2738,8 @@ function LogEntryForm({ weather, marine, location, windUnit, onClose, onSaved })
     if (marine && marine.hourly && Array.isArray(marine.hourly.sea_level_height_msl)) {
       const tTimes = marine.hourly.time;
       const tHeights = marine.hourly.sea_level_height_msl;
-      let tIdx = tTimes.indexOf(cur.time);
-      if (tIdx === -1) tIdx = Math.min(tTimes.length - 1, Math.floor(tTimes.length / 2));
-      if (tHeights[tIdx] != null) {
+      const tIdx = findNowIndex(tTimes, cur.time);
+      if (tIdx !== -1 && tHeights[tIdx] != null) {
         tideHeight = tHeights[tIdx];
         const tPrev = tHeights[Math.max(0, tIdx - 1)];
         tideTrend = tPrev != null ? (tideHeight > tPrev ? 'rising' : tideHeight < tPrev ? 'falling' : 'steady') : null;
@@ -2785,7 +2867,7 @@ function LogEntryCard({ entry, onDelete }) {
         a.href = url;
         a.download = 'voyage-log.jpg';
         a.click();
-        URL.revokeObjectURL(url);
+        setTimeout(() => URL.revokeObjectURL(url), 3000);
         setShareNote('Sharing isn\u2019t supported here — downloaded the image instead.');
       }
     } catch (e) {
@@ -2931,6 +3013,20 @@ function App() {
     return () => clearInterval(id);
   }, []);
 
+  // Offline indicator — with the service worker serving last-known data,
+  // the app keeps working offline, so it needs to say when it's doing that.
+  const [offline, setOffline] = useState(typeof navigator !== 'undefined' && navigator.onLine === false);
+  useEffect(() => {
+    const goOnline = () => setOffline(false);
+    const goOffline = () => setOffline(true);
+    window.addEventListener('online', goOnline);
+    window.addEventListener('offline', goOffline);
+    return () => {
+      window.removeEventListener('online', goOnline);
+      window.removeEventListener('offline', goOffline);
+    };
+  }, []);
+
   const [tempLocation, setTempLocation] = useState(null);
   const [showFavourites, setShowFavourites] = useState(false);
 
@@ -3011,25 +3107,31 @@ function App() {
     saveState(next);
   }
 
+  // Keyed on coordinates, not the location object — patching a location
+  // (setting coast direction, renaming the active favourite, saving a temp
+  // spot) creates a new object with the same coords and shouldn't refetch
+  // everything or reset the 30-minute refresh timer.
+  const activeLat = activeLocation ? activeLocation.lat : null;
+  const activeLon = activeLocation ? activeLocation.lon : null;
   const loadWeather = useCallback(async (isManual) => {
-    if (!activeLocation) return;
+    if (activeLat == null) return;
     if (isManual) setRefreshing(true);
     try {
-      const w = await fetchWeather(activeLocation.lat, activeLocation.lon);
+      const w = await fetchWeather(activeLat, activeLon);
       setWeather(w);
       setLastFetchedAt(new Date());
     } catch {
       // keep showing last-known data on failure
     }
     try {
-      const m = await fetchMarine(activeLocation.lat, activeLocation.lon);
+      const m = await fetchMarine(activeLat, activeLon);
       setMarine(m);
     } catch {
       setMarine(null);
     } finally {
       if (isManual) setRefreshing(false);
     }
-  }, [activeLocation]);
+  }, [activeLat, activeLon]);
 
   useEffect(() => {
     loadWeather(false);
@@ -3041,8 +3143,8 @@ function App() {
     if (!weather || !weather.hourly) return false;
     const { time, pressure_msl } = weather.hourly;
     if (!Array.isArray(time) || time.length === 0 || !Array.isArray(pressure_msl)) return false;
-    let nowIdx = time.indexOf(weather.current.time);
-    if (nowIdx === -1) nowIdx = time.length - 1;
+    let nowIdx = findNowIndex(time, weather.current.time);
+    if (nowIdx === -1) return false;
     const prevIdx = Math.max(0, nowIdx - 3);
     if (pressure_msl[nowIdx] == null || pressure_msl[prevIdx] == null) return false;
     return classifyTrend(pressure_msl[nowIdx] - pressure_msl[prevIdx]).storm;
@@ -3092,6 +3194,13 @@ function App() {
           </div>
         )}
       </header>
+
+      {offline && (
+        // --case-light, not --storm: informational, not an alert.
+        <div className="storm-banner" style={{ background: 'var(--case-light)' }}>
+          <span>Offline — showing last-known data.</span>
+        </div>
+      )}
 
       {trendFalling && (
         <div className="storm-banner">
