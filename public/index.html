@@ -1215,6 +1215,16 @@ async function fetchTideEvents(stationId) {
   return r.json();
 }
 
+// Auto coast orientation — the nearest OSM coastline segment's seaward
+// normal (see /api/seaward on the server for how). Returns
+// { seaward: degrees | null } — null means no coastline within range,
+// i.e. inland, where shore wind isn't applicable.
+async function fetchSeaward(lat, lon) {
+  const r = await fetch(`/api/seaward?lat=${lat}&lon=${lon}`);
+  if (!r.ok) throw new Error('seaward fetch failed');
+  return r.json();
+}
+
 // The Stations endpoint's exact wrapper shape isn't fully pinned down from
 // docs alone, so this accepts either a bare array of GeoJSON Features or a
 // FeatureCollection.
@@ -1880,6 +1890,9 @@ function SeawardCompass({ value, onSelect }) {
     { deg: 0, label: 'N' }, { deg: 45, label: 'NE' }, { deg: 90, label: 'E' }, { deg: 135, label: 'SE' },
     { deg: 180, label: 'S' }, { deg: 225, label: 'SW' }, { deg: 270, label: 'W' }, { deg: 315, label: 'NW' },
   ];
+  // Auto-detected values are exact bearings (e.g. 167°), not 45° steps —
+  // highlight the nearest spoke rather than requiring an exact match.
+  const nearestDeg = value != null ? (Math.round(value / 45) * 45) % 360 : null;
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
       <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--line)" strokeWidth="1.5" />
@@ -1887,7 +1900,7 @@ function SeawardCompass({ value, onSelect }) {
       {dirs.map(({ deg, label }) => {
         const rad = ((deg - 90) * Math.PI) / 180;
         const x = cx + r * Math.cos(rad), y = cy + r * Math.sin(rad);
-        const active = value === deg;
+        const active = deg === nearestDeg;
         return (
           <g key={deg} onClick={() => onSelect(deg)} style={{ cursor: 'pointer' }}>
             <circle cx={x} cy={y} r="17" fill={active ? 'var(--accent)' : 'var(--panel-raised)'} stroke="var(--line)" />
@@ -1899,21 +1912,45 @@ function SeawardCompass({ value, onSelect }) {
   );
 }
 
-function CoastDirectionSheet({ location, onSelect, onClose }) {
+function CoastDirectionSheet({ location, onSelect, onAutoDetect, onClose }) {
+  const [autoState, setAutoState] = useState(null); // null | 'busy' | 'none' | 'fail'
+  const isAuto = location && location.seawardSource === 'auto' && location.seaward != null;
   return ReactDOM.createPortal(
     <div className="sheet-backdrop" onClick={onClose}>
-      <div className="sheet" style={{ maxHeight: '60vh' }} onClick={(e) => e.stopPropagation()}>
+      <div className="sheet" style={{ maxHeight: '70vh' }} onClick={(e) => e.stopPropagation()}>
         <div className="sheet-grip" />
         <div className="sheet-title-row">
           <h2>Which way is the sea?</h2>
           <button className="icon-btn" onClick={onClose} aria-label="Close"><Icon.Close /></button>
         </div>
         <p className="empty-hint" style={{ padding: '0 0 12px' }}>
-          For {location ? location.label : 'this location'} — pick the compass direction pointing from the shore out to open water. Used to work out onshore/offshore wind.
+          For {location ? location.label : 'this location'} — the compass direction pointing from the shore out to open water, used to work out onshore/offshore wind.
+          {isAuto ? ` Currently auto-detected from the OSM coastline (${Math.round(location.seaward)}°) — pick a direction below to override it.` : ' Pick a direction below.'}
         </p>
         <div style={{ display: 'flex', justifyContent: 'center', paddingBottom: 10 }}>
           <SeawardCompass value={location ? location.seaward : null} onSelect={(deg) => { onSelect(deg); onClose(); }} />
         </div>
+        {onAutoDetect && (
+          <button
+            className="route-action-btn"
+            style={{ flex: 'none' }}
+            disabled={autoState === 'busy'}
+            onClick={async () => {
+              setAutoState('busy');
+              try {
+                const found = await onAutoDetect();
+                if (found) onClose();
+                else setAutoState('none');
+              } catch {
+                setAutoState('fail');
+              }
+            }}
+          >
+            {autoState === 'busy' ? 'Detecting…' : '↻ Auto-detect from coastline'}
+          </button>
+        )}
+        {autoState === 'none' && <p className="empty-hint" style={{ padding: '8px 0 0' }}>No coastline found within 3 km — pick a direction manually.</p>}
+        {autoState === 'fail' && <p className="empty-hint" style={{ padding: '8px 0 0' }}>Couldn't reach the coastline service — pick a direction manually.</p>}
       </div>
     </div>,
     document.body
@@ -2111,14 +2148,14 @@ function GaugeView({ weather, marine, windUnit, location, tideStations, onUpdate
                   style={{ fontSize: 11, color: 'var(--accent)', marginTop: 4, fontWeight: 600, padding: 0 }}
                   onClick={() => setCoastSheetOpen(true)}
                 >
-                  {shoreWind.toUpperCase()} WIND
+                  {shoreWind.toUpperCase()} WIND{location && location.seawardSource === 'auto' ? ' · AUTO' : ''}
                 </button>
               ) : (
                 <button
                   style={{ fontSize: 11, color: 'var(--ink-soft)', marginTop: 4, textDecoration: 'underline', padding: 0 }}
                   onClick={() => setCoastSheetOpen(true)}
                 >
-                  Set coast direction
+                  {location && location.seawardChecked ? 'No coastline nearby — set manually' : 'Set coast direction'}
                 </button>
               )}
             </div>
@@ -2169,7 +2206,16 @@ function GaugeView({ weather, marine, windUnit, location, tideStations, onUpdate
       {coastSheetOpen && (
         <CoastDirectionSheet
           location={location}
-          onSelect={(deg) => onUpdateLocation && location && onUpdateLocation(location.id, { seaward: deg })}
+          onSelect={(deg) => onUpdateLocation && location && onUpdateLocation(location.id, { seaward: deg, seawardSource: 'manual', seawardChecked: true })}
+          onAutoDetect={location && onUpdateLocation ? async () => {
+            const res = await fetchSeaward(location.lat, location.lon);
+            onUpdateLocation(location.id, {
+              seaward: res.seaward,
+              seawardSource: res.seaward != null ? 'auto' : null,
+              seawardChecked: true,
+            });
+            return res.seaward != null;
+          } : null}
           onClose={() => setCoastSheetOpen(false)}
         />
       )}
@@ -3067,6 +3113,12 @@ function App() {
       lat: tempLocation.lat,
       lon: tempLocation.lon,
       timezone: tempLocation.timezone || 'auto',
+      // Carry over the coast direction already worked out (or manually set)
+      // while this was just being viewed — don't make the user or the
+      // auto-detector do it again.
+      seaward: tempLocation.seaward != null ? tempLocation.seaward : null,
+      seawardSource: tempLocation.seawardSource || null,
+      seawardChecked: !!tempLocation.seawardChecked,
     };
     const next = { ...state, locations: [...state.locations, loc], activeLocationId: id };
     setState(next);
@@ -3138,6 +3190,29 @@ function App() {
     const id = setInterval(() => loadWeather(false), 30 * 60 * 1000);
     return () => clearInterval(id);
   }, [loadWeather]);
+
+  // Auto-detect the coast direction for any location that doesn't have one
+  // yet (favourites and temp views alike). A manual pick is never
+  // overwritten — this only ever fills blanks. A completed lookup,
+  // including "no coastline nearby" (inland), is marked seawardChecked so
+  // it isn't re-queried; failures stay unmarked and retry next time the
+  // location is active.
+  useEffect(() => {
+    if (!activeLocation || activeLocation.seaward != null || activeLocation.seawardChecked) return;
+    let cancelled = false;
+    fetchSeaward(activeLocation.lat, activeLocation.lon)
+      .then((res) => {
+        if (cancelled) return;
+        updateLocationField(activeLocation.id, {
+          seaward: res.seaward,
+          seawardSource: res.seaward != null ? 'auto' : null,
+          seawardChecked: true,
+        });
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeLocation]);
 
   const trendFalling = useMemo(() => {
     if (!weather || !weather.hourly) return false;

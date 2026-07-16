@@ -172,6 +172,83 @@ app.get('/api/geocode-places', async (req, res) => {
   }
 });
 
+// --- Seaward direction (auto coast orientation) ---------------------------
+// OSM's natural=coastline ways follow a hard mapping convention: land is on
+// the left of the way's direction, water on the right. So the compass
+// direction pointing from the shore out to sea is the nearest coastline
+// segment's bearing + 90°. Queried via Overpass, proxied here for the same
+// reason as Nominatim (identifying User-Agent + shared-service etiquette),
+// and cached in memory — coastlines don't move, so one lookup per place.
+// Lakes/rivers aren't tagged natural=coastline, so inland locations cleanly
+// return null: shore wind is simply not applicable there.
+const seawardCache = new Map();
+const SEAWARD_RADIUS_M = 3000;
+
+const toRad = (d) => (d * Math.PI) / 180;
+const toDeg = (r) => (r * 180) / Math.PI;
+
+function segBearing(a, b) {
+  const y = Math.sin(toRad(b.lon - a.lon)) * Math.cos(toRad(b.lat));
+  const x = Math.cos(toRad(a.lat)) * Math.sin(toRad(b.lat)) -
+    Math.sin(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.cos(toRad(b.lon - a.lon));
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+// Distance in metres from point p to segment a–b, in a local planar
+// approximation — fine at the few-km scale this is ever used at.
+function pointSegDistM(p, a, b) {
+  const kx = 111320 * Math.cos(toRad(p.lat));
+  const ky = 110540;
+  const ax = (a.lon - p.lon) * kx, ay = (a.lat - p.lat) * ky;
+  const bx = (b.lon - p.lon) * kx, by = (b.lat - p.lat) * ky;
+  const dx = bx - ax, dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len2));
+  return Math.hypot(ax + t * dx, ay + t * dy);
+}
+
+app.get('/api/seaward', async (req, res) => {
+  const lat = parseFloat(req.query.lat), lon = parseFloat(req.query.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+    return res.status(400).json({ error: 'lat and lon query params required' });
+  }
+  const key = `${lat.toFixed(3)},${lon.toFixed(3)}`;
+  if (seawardCache.has(key)) return res.json(seawardCache.get(key));
+  try {
+    const q = `[out:json][timeout:15];way(around:${SEAWARD_RADIUS_M},${lat},${lon})[natural=coastline];out geom;`;
+    const upstream = await fetch('https://overpass-api.de/api/interpreter', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'BarometerPWA/1.0 (personal-use weather app)',
+      },
+      body: 'data=' + encodeURIComponent(q),
+    });
+    // 429/504 from the shared instance are transient — report upstream
+    // failure and DON'T cache it, so the app can retry later.
+    if (!upstream.ok) return res.status(502).json({ error: `Overpass returned ${upstream.status}` });
+    const data = await upstream.json();
+    let best = null;
+    for (const el of data.elements || []) {
+      if (!el.geometry || el.geometry.length < 2) continue;
+      for (let i = 0; i < el.geometry.length - 1; i++) {
+        const a = el.geometry[i], b = el.geometry[i + 1];
+        const d = pointSegDistM({ lat, lon }, a, b);
+        if (!best || d < best.distM) best = { distM: d, bearing: segBearing(a, b) };
+      }
+    }
+    const result = best
+      ? { seaward: Math.round((best.bearing + 90) % 360), coastDistanceM: Math.round(best.distM) }
+      : { seaward: null, coastDistanceM: null };
+    if (seawardCache.size > 500) seawardCache.clear();
+    seawardCache.set(key, result);
+    res.json(result);
+  } catch (err) {
+    console.error('GET /api/seaward failed', err);
+    res.status(502).json({ error: 'Seaward lookup failed' });
+  }
+});
+
 // --- Saved routes -------------------------------------------------------
 // Same one-row-per-item pattern as the voyage log.
 
