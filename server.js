@@ -13,6 +13,12 @@ const ADMIRALTY_BASE = 'https://admiraltyapi.azure-api.net/uktidalapi/api/V1';
 // container restart counts as a new version.
 const BUILD_ID = process.env.BUILD_ID || String(Date.now());
 
+// The email that owns pre-multi-user data, and the fallback identity for
+// requests that arrive without a Cloudflare Access header (LAN/local
+// testing bypasses the tunnel). Set it to the email you log in to the
+// Access PIN screen with.
+const OWNER_EMAIL = (process.env.OWNER_EMAIL || '').trim().toLowerCase();
+
 // --- Postgres -----------------------------------------------------------
 // Local Postgres container, no SSL — only enable SSL for connection
 // strings that explicitly need it (e.g. a SUPABASE_URL-style var), never
@@ -34,8 +40,62 @@ const DEFAULT_STATE = {
   windUnit: 'kn',
 };
 
-async function getState() {
-  const { rows } = await pool.query('SELECT value FROM kv_store WHERE key = $1', ['app_state']);
+// --- Per-user data ------------------------------------------------------
+// Cloudflare Access authenticates every visitor and stamps requests with
+// their email; all personal data (favourites/settings, voyage log, routes)
+// is namespaced by it: u:<email>:state, u:<email>:log:<id>,
+// u:<email>:route:<id>. There is deliberately no in-app auth — Access IS
+// the login, and a new user's workspace simply comes into existence empty
+// on their first request. The header is trusted because public traffic
+// can only arrive via the tunnel; direct LAN access falls back to
+// OWNER_EMAIL (friends-level threat model, JWT validation possible later).
+
+function userOf(req) {
+  const email = req.get('cf-access-authenticated-user-email');
+  return (email || OWNER_EMAIL || 'local').trim().toLowerCase();
+}
+
+const K = {
+  state: (u) => `u:${u}:state`,
+  log: (u, id) => `u:${u}:log:${id}`,
+  route: (u, id) => `u:${u}:route:${id}`,
+};
+
+// Per-user listing deliberately avoids LIKE: the key prefix contains an
+// email, and emails routinely contain '_' — a LIKE wildcard that would
+// need escaping to stop ann_b@x matching annXb@x's rows. Plain prefix
+// equality has no wildcard semantics to get wrong, and the table is far
+// too small for the lost index use to matter.
+const PREFIX_MATCH = 'left(key, length($1)) = $1';
+
+// One-time migration of pre-multi-user rows (app_state, log:<id>,
+// route:<id>) into the owner's namespace. Lazy + retried per request
+// rather than at boot, since Postgres may not be up yet when the
+// container starts; idempotent because the WHERE clauses only ever match
+// un-namespaced keys.
+let migrated = false;
+async function ensureMigrated() {
+  if (migrated) return;
+  if (!OWNER_EMAIL) { migrated = true; return; } // nothing to target
+  const state = await pool.query(
+    `UPDATE kv_store SET key = 'u:' || $1 || ':state', updated_at = now()
+     WHERE key = 'app_state'
+       AND NOT EXISTS (SELECT 1 FROM kv_store WHERE key = 'u:' || $1 || ':state')`,
+    [OWNER_EMAIL]
+  );
+  const items = await pool.query(
+    `UPDATE kv_store SET key = 'u:' || $1 || ':' || key
+     WHERE key LIKE 'log:%' OR key LIKE 'route:%'`,
+    [OWNER_EMAIL]
+  );
+  if (state.rowCount || items.rowCount) {
+    console.log(`Migrated ${state.rowCount} state row(s) and ${items.rowCount} log/route row(s) to ${OWNER_EMAIL}`);
+  }
+  migrated = true;
+}
+
+async function getState(user) {
+  const { rows } = await pool.query('SELECT value FROM kv_store WHERE key = $1', [K.state(user)]);
   if (rows.length === 0) return DEFAULT_STATE;
   try {
     return JSON.parse(rows[0].value);
@@ -44,12 +104,12 @@ async function getState() {
   }
 }
 
-async function setState(state) {
+async function setState(user, state) {
   await pool.query(
     `INSERT INTO kv_store (key, value, updated_at)
-     VALUES ('app_state', $1, now())
+     VALUES ($1, $2, now())
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-    [JSON.stringify(state)]
+    [K.state(user), JSON.stringify(state)]
   );
 }
 
@@ -71,13 +131,27 @@ app.use(express.static(path.join(__dirname, 'public'), {
 
 // --- API ------------------------------------------------------------------
 
+// Resolve the requesting user and make sure legacy rows have been
+// migrated before any data endpoint runs. A failed migration attempt
+// (e.g. Postgres still starting) is logged and retried on the next
+// request; the data query below would fail on the same cause anyway.
+app.use('/api', async (req, res, next) => {
+  req.userEmail = userOf(req);
+  try {
+    await ensureMigrated();
+  } catch (err) {
+    console.error('legacy-data migration attempt failed (will retry)', err.message);
+  }
+  next();
+});
+
 app.get('/api/version', (req, res) => {
   res.json({ version: BUILD_ID });
 });
 
 app.get('/api/state', async (req, res) => {
   try {
-    const state = await getState();
+    const state = await getState(req.userEmail);
     res.json(state);
   } catch (err) {
     console.error('GET /api/state failed', err);
@@ -91,7 +165,7 @@ app.put('/api/state', async (req, res) => {
     return res.status(400).json({ error: 'Malformed state payload' });
   }
   try {
-    await setState(body);
+    await setState(req.userEmail, body);
     res.json({ ok: true });
   } catch (err) {
     console.error('PUT /api/state failed', err);
@@ -254,7 +328,7 @@ app.get('/api/seaward', async (req, res) => {
 
 app.get('/api/routes', async (req, res) => {
   try {
-    const { rows } = await pool.query("SELECT key, value FROM kv_store WHERE key LIKE 'route:%'");
+    const { rows } = await pool.query(`SELECT key, value FROM kv_store WHERE ${PREFIX_MATCH}`, [K.route(req.userEmail, '')]);
     const routes = rows
       .map((r) => { try { return JSON.parse(r.value); } catch { return null; } })
       .filter(Boolean)
@@ -278,7 +352,7 @@ app.post('/api/routes', async (req, res) => {
       `INSERT INTO kv_store (key, value, updated_at)
        VALUES ($1, $2, now())
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-      [`route:${id}`, JSON.stringify(toSave)]
+      [K.route(req.userEmail, id), JSON.stringify(toSave)]
     );
     res.json(toSave);
   } catch (err) {
@@ -289,7 +363,7 @@ app.post('/api/routes', async (req, res) => {
 
 app.delete('/api/routes/:id', async (req, res) => {
   try {
-    await pool.query('DELETE FROM kv_store WHERE key = $1', [`route:${req.params.id}`]);
+    await pool.query('DELETE FROM kv_store WHERE key = $1', [K.route(req.userEmail, req.params.id)]);
     res.json({ ok: true });
   } catch (err) {
     console.error('DELETE /api/routes failed', err);
@@ -303,7 +377,7 @@ app.delete('/api/routes/:id', async (req, res) => {
 
 app.get('/api/log-entries', async (req, res) => {
   try {
-    const { rows } = await pool.query("SELECT key, value FROM kv_store WHERE key LIKE 'log:%'");
+    const { rows } = await pool.query(`SELECT key, value FROM kv_store WHERE ${PREFIX_MATCH}`, [K.log(req.userEmail, '')]);
     const entries = rows
       .map((r) => { try { return JSON.parse(r.value); } catch { return null; } })
       .filter(Boolean)
@@ -326,9 +400,11 @@ app.get('/api/log-entries', async (req, res) => {
   }
 });
 
+// Keyed by the requesting user, so one user can't fetch (or delete)
+// another's entries even with a known id.
 app.get('/api/log-entries/:id', async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT value FROM kv_store WHERE key = $1', [`log:${req.params.id}`]);
+    const { rows } = await pool.query('SELECT value FROM kv_store WHERE key = $1', [K.log(req.userEmail, req.params.id)]);
     if (rows.length === 0) return res.status(404).json({ error: 'Entry not found' });
     try {
       res.json(JSON.parse(rows[0].value));
@@ -353,7 +429,7 @@ app.post('/api/log-entries', async (req, res) => {
       `INSERT INTO kv_store (key, value, updated_at)
        VALUES ($1, $2, now())
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-      [`log:${id}`, JSON.stringify(toSave)]
+      [K.log(req.userEmail, id), JSON.stringify(toSave)]
     );
     res.json(toSave);
   } catch (err) {
@@ -364,7 +440,7 @@ app.post('/api/log-entries', async (req, res) => {
 
 app.delete('/api/log-entries/:id', async (req, res) => {
   try {
-    await pool.query('DELETE FROM kv_store WHERE key = $1', [`log:${req.params.id}`]);
+    await pool.query('DELETE FROM kv_store WHERE key = $1', [K.log(req.userEmail, req.params.id)]);
     res.json({ ok: true });
   } catch (err) {
     console.error('DELETE /api/log-entries failed', err);

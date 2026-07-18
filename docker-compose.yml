@@ -7,6 +7,7 @@ services:
       PORT: 3000
       DATABASE_URL: postgres://barometer:${POSTGRES_PASSWORD}@barometer-db:5432/barometer
       ADMIRALTY_API_KEY: ${ADMIRALTY_API_KEY}
+      OWNER_EMAIL: ${OWNER_EMAIL:-}
       # No default here — the old `${BUILD_ID:-dev}` pinned the version to
       # the literal string "dev" forever, so the frontend's force-reload-
       # on-deploy check never fired. Left empty, server.js falls back to
