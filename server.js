@@ -421,28 +421,102 @@ app.delete('/api/routes/:id', async (req, res) => {
   }
 });
 
+// --- Log sharing ------------------------------------------------------
+// Whole-log, read-only, explicitly-named sharing: u:<owner>:sharelog
+// holds the list of viewer emails the owner has invited. One-directional
+// — mutual sharing is simply both people adding each other. Only the log
+// is ever shared; favourites and routes stay private.
+const SHARE_SUFFIX = ':sharelog';
+const shareKey = (u) => `u:${u}${SHARE_SUFFIX}`;
+
+function normalizeViewers(list) {
+  if (!Array.isArray(list)) return null;
+  const out = [];
+  for (const v of list) {
+    if (typeof v !== 'string') return null;
+    const e = v.trim().toLowerCase();
+    if (!e || e.length > 254 || !e.includes('@') || out.includes(e)) continue;
+    out.push(e);
+  }
+  return out.slice(0, 20);
+}
+
+async function ownersSharingWith(viewer) {
+  const { rows } = await pool.query("SELECT key, value FROM kv_store WHERE key LIKE 'u:%:sharelog'");
+  const owners = [];
+  for (const r of rows) {
+    try {
+      const viewers = JSON.parse(r.value).viewers || [];
+      if (viewers.includes(viewer)) owners.push(r.key.slice(2, -SHARE_SUFFIX.length));
+    } catch {}
+  }
+  return owners;
+}
+
+app.get('/api/log-sharing', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT value FROM kv_store WHERE key = $1', [shareKey(req.userEmail)]);
+    let viewers = [];
+    if (rows.length > 0) {
+      try { viewers = JSON.parse(rows[0].value).viewers || []; } catch {}
+    }
+    res.json({ viewers });
+  } catch (err) {
+    console.error('GET /api/log-sharing failed', err);
+    res.status(500).json({ error: 'Could not load sharing settings' });
+  }
+});
+
+app.put('/api/log-sharing', async (req, res) => {
+  const viewers = normalizeViewers(req.body && req.body.viewers);
+  if (!viewers) return res.status(400).json({ error: 'Malformed viewers list' });
+  try {
+    await pool.query(
+      `INSERT INTO kv_store (key, value, updated_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [shareKey(req.userEmail), JSON.stringify({ viewers })]
+    );
+    res.json({ viewers });
+  } catch (err) {
+    console.error('PUT /api/log-sharing failed', err);
+    res.status(500).json({ error: 'Could not save sharing settings' });
+  }
+});
+
 // --- Voyage log -------------------------------------------------------
 // Each entry is its own kv_store row (key: log:<id>) rather than one
 // array in a single row, so entries can be added/removed independently.
 
+// List payload: strip the full-size photos and send only a thumbnail —
+// with base64 photos inline, the old everything-response grew without
+// bound as the log filled up. The detail view fetches the complete entry
+// by id. Legacy entries without a stored thumb fall back to their full
+// photo, so nothing disappears.
+function lightEntry(e) {
+  const { photos, photo, ...light } = e;
+  light.thumb = e.thumb || (Array.isArray(photos) && photos[0]) || photo || null;
+  light.photoCount = Array.isArray(photos) ? photos.length : photo ? 1 : 0;
+  return light;
+}
+
+function parseRows(rows) {
+  return rows.map((r) => { try { return JSON.parse(r.value); } catch { return null; } }).filter(Boolean);
+}
+
 app.get('/api/log-entries', async (req, res) => {
   try {
     const { rows } = await pool.query(`SELECT key, value FROM kv_store WHERE ${PREFIX_MATCH}`, [K.log(req.userEmail, '')]);
-    const entries = rows
-      .map((r) => { try { return JSON.parse(r.value); } catch { return null; } })
-      .filter(Boolean)
-      // List payload: strip the full-size photos and send only a thumbnail
-      // — with base64 photos inline, the old everything-response grew
-      // without bound as the log filled up. The detail view fetches the
-      // complete entry by id. Legacy entries without a stored thumb fall
-      // back to their full photo, so nothing disappears.
-      .map((e) => {
-        const { photos, photo, ...light } = e;
-        light.thumb = e.thumb || (Array.isArray(photos) && photos[0]) || photo || null;
-        light.photoCount = Array.isArray(photos) ? photos.length : photo ? 1 : 0;
-        return light;
-      })
-      .sort((a, b) => new Date(b.date) - new Date(a.date));
+    const entries = parseRows(rows).map(lightEntry);
+    // Entries from anyone who has shared their log with this user, tagged
+    // so the UI can badge them and withhold edit/delete.
+    for (const owner of await ownersSharingWith(req.userEmail)) {
+      const shared = await pool.query(`SELECT key, value FROM kv_store WHERE ${PREFIX_MATCH}`, [K.log(owner, '')]);
+      for (const e of parseRows(shared.rows)) {
+        entries.push({ ...lightEntry(e), shared: true, owner });
+      }
+    }
+    entries.sort((a, b) => new Date(b.date) - new Date(a.date));
     res.json(entries);
   } catch (err) {
     console.error('GET /api/log-entries failed', err);
@@ -450,14 +524,24 @@ app.get('/api/log-entries', async (req, res) => {
   }
 });
 
-// Keyed by the requesting user, so one user can't fetch (or delete)
-// another's entries even with a known id.
+// Served if the entry is the requester's own, or belongs to someone who
+// has explicitly shared their log with them — anyone else gets a 404
+// even with a known id. Shared entries are tagged read-only.
 app.get('/api/log-entries/:id', async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT value FROM kv_store WHERE key = $1', [K.log(req.userEmail, req.params.id)]);
+    let { rows } = await pool.query('SELECT value FROM kv_store WHERE key = $1', [K.log(req.userEmail, req.params.id)]);
+    let sharedOwner = null;
+    if (rows.length === 0) {
+      for (const owner of await ownersSharingWith(req.userEmail)) {
+        const r = await pool.query('SELECT value FROM kv_store WHERE key = $1', [K.log(owner, req.params.id)]);
+        if (r.rows.length > 0) { rows = r.rows; sharedOwner = owner; break; }
+      }
+    }
     if (rows.length === 0) return res.status(404).json({ error: 'Entry not found' });
     try {
-      res.json(JSON.parse(rows[0].value));
+      const entry = JSON.parse(rows[0].value);
+      if (sharedOwner) { entry.shared = true; entry.owner = sharedOwner; }
+      res.json(entry);
     } catch {
       res.status(500).json({ error: 'Entry is corrupt' });
     }

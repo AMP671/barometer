@@ -1026,6 +1026,26 @@ async function fetchLogEntry(id) {
   return r.json();
 }
 
+// --- Log sharing ------------------------------------------------------
+async function fetchLogSharing() {
+  const r = await fetch('/api/log-sharing');
+  if (!r.ok) throw new Error('sharing fetch failed');
+  return r.json();
+}
+async function saveLogSharing(viewers) {
+  const r = await fetch('/api/log-sharing', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ viewers }),
+  });
+  if (!r.ok) throw new Error('sharing save failed');
+  return r.json();
+}
+// Short display tag for a sharer — the bit before the @.
+function ownerTag(email) {
+  return email ? String(email).split('@')[0] : '';
+}
+
 // --- Saved routes -----------------------------------------------------
 async function fetchRoutes() {
   const r = await fetch('/api/routes');
@@ -3355,7 +3375,7 @@ function LogEntryCard({ entry, onOpen }) {
           {entry.rating != null && <span className="rating-dots">{'●'.repeat(entry.rating)}{'○'.repeat(5 - entry.rating)}</span>}
         </div>
         <div className="log-sub mono">
-          {act ? `${act.label} · ` : ''}{d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })} · {d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          {entry.shared ? `from ${ownerTag(entry.owner)} · ` : ''}{act ? `${act.label} · ` : ''}{d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })} · {d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
         </div>
         {bits.length > 0 && <div className="log-summary mono">{bits.join(' · ')}</div>}
         {entry.comment ? <div className="log-comment">{entry.comment.length > 90 ? entry.comment.slice(0, 90) + '…' : entry.comment}</div> : null}
@@ -3391,6 +3411,87 @@ function ConfirmSheet({ title, message, confirmLabel, onConfirm, onClose }) {
           >
             {busy ? '…' : confirmLabel}
           </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+// Who can see MY log — read-only, per named email, revocable. Seeing
+// someone else's log requires them to add you the same way.
+function LogSharingSheet({ onClose }) {
+  const [viewers, setViewers] = useState(null);
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    fetchLogSharing().then((d) => setViewers(d.viewers || [])).catch(() => setViewers([]));
+  }, []);
+
+  async function update(next) {
+    setBusy(true);
+    setError(null);
+    try {
+      const d = await saveLogSharing(next);
+      setViewers(d.viewers || next);
+    } catch {
+      setError("Couldn't save — check your connection and try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function handleAdd() {
+    const email = input.trim().toLowerCase();
+    if (!email.includes('@')) { setError('That doesn’t look like an email address.'); return; }
+    if (viewers.includes(email)) { setInput(''); return; }
+    setInput('');
+    update([...viewers, email]);
+  }
+
+  return ReactDOM.createPortal(
+    <div className="sheet-backdrop" onClick={onClose}>
+      <div className="sheet" style={{ maxHeight: '70vh' }} onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-grip" />
+        <div className="sheet-title-row">
+          <h2>Share My Log</h2>
+          <button className="icon-btn" onClick={onClose} aria-label="Close"><Icon.Close /></button>
+        </div>
+        <p className="empty-hint" style={{ padding: '0 0 12px' }}>
+          People listed here can see your voyage log — entries, photos and conditions — read-only. They can't change or delete anything, and you can remove them any time. To see their log, they add your email the same way.
+        </p>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+          <input
+            className="log-input"
+            style={{ flex: 1 }}
+            placeholder="friend@example.com"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleAdd(); }}
+          />
+          <button className="route-action-btn" style={{ flex: 'none', padding: '0 16px' }} disabled={busy || !input.trim()} onClick={handleAdd}>Add</button>
+        </div>
+        {error && <p className="empty-hint" style={{ color: 'var(--storm)', padding: '0 0 8px' }}>{error}</p>}
+        <div className="sheet-scroll">
+          {viewers == null ? (
+            <p className="empty-hint">Loading…</p>
+          ) : viewers.length === 0 ? (
+            <p className="empty-hint">Not shared with anyone yet.</p>
+          ) : (
+            viewers.map((v) => (
+              <div className="fav-row" key={v}>
+                <div className="fav-main">
+                  <span className="name">{ownerTag(v)}</span>
+                  <span className="sub">{v}</span>
+                </div>
+                <button className="icon-btn" disabled={busy} onClick={() => update(viewers.filter((x) => x !== v))} aria-label={`Stop sharing with ${v}`}>
+                  <Icon.Trash />
+                </button>
+              </div>
+            ))
+          )}
         </div>
       </div>
     </div>,
@@ -3458,7 +3559,7 @@ function LogDetailSheet({ entryId, onEdit, onDelete, onClose }) {
           ) : (
             <React.Fragment>
               <div className="mono" style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 10 }}>
-                {act ? `${act.label} · ` : ''}
+                {entry.shared ? `Shared by ${ownerTag(entry.owner)} · ` : ''}{act ? `${act.label} · ` : ''}
                 {d.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} · {d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 {entry.rating ? ` · ${'●'.repeat(entry.rating)}${'○'.repeat(5 - entry.rating)}` : ''}
               </div>
@@ -3510,8 +3611,8 @@ function LogDetailSheet({ entryId, onEdit, onDelete, onClose }) {
 
               <div className="detail-actions">
                 <button className="route-action-btn" onClick={handleShare} disabled={sharing}>{sharing ? 'Preparing…' : 'Share'}</button>
-                <button className="route-action-btn" onClick={() => onEdit(entry)}>Edit</button>
-                <button className="route-action-btn danger" onClick={() => onDelete(entry)}>Delete</button>
+                {!entry.shared && <button className="route-action-btn" onClick={() => onEdit(entry)}>Edit</button>}
+                {!entry.shared && <button className="route-action-btn danger" onClick={() => onDelete(entry)}>Delete</button>}
               </div>
             </React.Fragment>
           )}
@@ -3530,6 +3631,7 @@ function LogView({ weather, marine, location, windUnit }) {
   const [detailId, setDetailId] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [filter, setFilter] = useState('all');
+  const [sharingOpen, setSharingOpen] = useState(false);
 
   async function refresh() {
     try {
@@ -3543,12 +3645,20 @@ function LogView({ weather, marine, location, windUnit }) {
     fetchLogEntries().then(setEntries).catch(() => {}).finally(() => setLoading(false));
   }, []);
 
-  const filtered = filter === 'all' ? entries : entries.filter((e) => (e.activity || 'other') === filter);
+  const hasShared = entries.some((e) => e.shared);
+  const filtered = entries.filter((e) => {
+    if (filter === 'all') return true;
+    if (filter === 'mine') return !e.shared;
+    if (filter === 'shared') return !!e.shared;
+    return (e.activity || 'other') === filter;
+  });
 
+  // Stats are about YOUR trips — shared entries don't inflate them.
+  const own = entries.filter((e) => !e.shared);
   const yearNow = new Date().getFullYear();
-  const yearCount = entries.filter((e) => new Date(e.date).getFullYear() === yearNow).length;
+  const yearCount = own.filter((e) => new Date(e.date).getFullYear() === yearNow).length;
   let latestWater = null;
-  for (const e of entries) {
+  for (const e of own) {
     if (e.weather && e.weather.waterTemp != null) { latestWater = e.weather.waterTemp; break; }
   }
 
@@ -3567,13 +3677,14 @@ function LogView({ weather, marine, location, windUnit }) {
 
   return (
     <div className="view">
-      <div style={{ padding: '14px 14px 4px' }}>
-        <button className="watch-btn" style={{ width: '100%' }} onClick={() => setFormOpen(true)}>+ New Log Entry</button>
+      <div style={{ padding: '14px 14px 4px', display: 'flex', gap: 8 }}>
+        <button className="watch-btn" style={{ flex: 1 }} onClick={() => setFormOpen(true)}>+ New Log Entry</button>
+        <button className="route-action-btn" style={{ flex: 'none', padding: '0 14px' }} onClick={() => setSharingOpen(true)}>Sharing</button>
       </div>
 
       {entries.length > 0 && (
         <div className="stats-strip">
-          <div className="stat"><span className="label">TRIPS</span><span className="value mono">{entries.length}</span></div>
+          <div className="stat"><span className="label">TRIPS</span><span className="value mono">{own.length}</span></div>
           <div className="stat"><span className="label">THIS YEAR</span><span className="value mono">{yearCount}</span></div>
           {latestWater != null && <div className="stat"><span className="label">LAST WATER</span><span className="value mono">{latestWater.toFixed(0)}°C</span></div>}
         </div>
@@ -3582,6 +3693,12 @@ function LogView({ weather, marine, location, windUnit }) {
       {entries.length > 0 && (
         <div className="day-tabs" style={{ padding: '10px 14px 0' }}>
           <button className={`day-tab ${filter === 'all' ? 'active' : ''}`} onClick={() => setFilter('all')}>All</button>
+          {hasShared && (
+            <React.Fragment>
+              <button className={`day-tab ${filter === 'mine' ? 'active' : ''}`} onClick={() => setFilter('mine')}>Mine</button>
+              <button className={`day-tab ${filter === 'shared' ? 'active' : ''}`} onClick={() => setFilter('shared')}>Shared</button>
+            </React.Fragment>
+          )}
           {ACTIVITIES.map((a) => (
             <button key={a.id} className={`day-tab ${filter === a.id ? 'active' : ''}`} onClick={() => setFilter(a.id)}>{a.label}</button>
           ))}
@@ -3625,6 +3742,8 @@ function LogView({ weather, marine, location, windUnit }) {
           onClose={() => setDetailId(null)}
         />
       )}
+
+      {sharingOpen && <LogSharingSheet onClose={() => setSharingOpen(false)} />}
 
       {confirmDelete && (
         <ConfirmSheet
