@@ -1239,7 +1239,8 @@ async function buildShareImage(entry) {
   if (entry.weather) {
     const w = entry.weather;
     const windDirStr = w.windDir != null ? ` ${compassLabel(w.windDir)}` : '';
-    const parts = [`${w.pressure.toFixed(0)} hPa`, `${w.temp.toFixed(0)}°C`, `${Math.round(w.windSpeed)} ${w.windUnit === 'mph' ? 'mph' : 'kn'}${windDirStr} wind`];
+    const gustStr = w.gusts != null ? ` (g ${Math.round(w.gusts)})` : '';
+    const parts = [`${w.pressure.toFixed(0)} hPa`, `${w.temp.toFixed(0)}°C`, `${Math.round(w.windSpeed)}${gustStr} ${w.windUnit === 'mph' ? 'mph' : 'kn'}${windDirStr} wind`];
     if (w.shore) parts.push(w.shore);
     if (w.waterTemp != null) parts.push(`water ${w.waterTemp.toFixed(0)}°C`);
     if (w.waveHeight != null) parts.push(`${w.waveHeight.toFixed(1)}m waves`);
@@ -1331,12 +1332,12 @@ async function fetchWeather(lat, lon) {
   const params = new URLSearchParams({
     latitude: lat,
     longitude: lon,
-    current: 'temperature_2m,relative_humidity_2m,apparent_temperature,pressure_msl,wind_speed_10m,wind_direction_10m',
+    current: 'temperature_2m,relative_humidity_2m,apparent_temperature,pressure_msl,wind_speed_10m,wind_direction_10m,wind_gusts_10m,weather_code,precipitation',
     // temp/wind in hourly too (not just current) so log entries can
     // snapshot the conditions at the entry's own date/time, and
     // past_days=3 so a trip logged a day or two later still gets them.
-    hourly: 'pressure_msl,uv_index,temperature_2m,wind_speed_10m,wind_direction_10m',
-    daily: 'temperature_2m_max,temperature_2m_min,wind_speed_10m_max,wind_direction_10m_dominant,uv_index_max',
+    hourly: 'pressure_msl,uv_index,temperature_2m,wind_speed_10m,wind_direction_10m,wind_gusts_10m',
+    daily: 'temperature_2m_max,temperature_2m_min,wind_speed_10m_max,wind_direction_10m_dominant,uv_index_max,weather_code,precipitation_sum,precipitation_probability_max',
     wind_speed_unit: 'kn',
     timezone: 'auto',
     past_days: '3',
@@ -1384,6 +1385,24 @@ function beaufort(knots) {
     if (knots < max) return { force, label };
   }
   return { force: 12, label: 'Hurricane' };
+}
+
+// WMO weather-interpretation codes → short label. Grouped, not the full
+// table — Open-Meteo only emits the standard subset.
+function weatherCodeLabel(code) {
+  if (code == null) return null;
+  if (code === 0) return 'Clear';
+  if (code === 1) return 'Mostly clear';
+  if (code === 2) return 'Partly cloudy';
+  if (code === 3) return 'Overcast';
+  if (code === 45 || code === 48) return 'Fog';
+  if (code >= 51 && code <= 57) return 'Drizzle';
+  if (code >= 61 && code <= 67) return 'Rain';
+  if (code >= 71 && code <= 77) return 'Snow';
+  if (code >= 80 && code <= 82) return 'Showers';
+  if (code === 85 || code === 86) return 'Snow showers';
+  if (code >= 95) return 'Thunderstorm';
+  return null;
 }
 
 // Finds local peaks/troughs in a sea-level time series — an approximate
@@ -2251,6 +2270,9 @@ function ForecastSection({ weather, marine, windUnit, seaward }) {
   const hasWave = mdaily && Array.isArray(mdaily.wave_height_max) && mdaily.wave_height_max[i] != null;
   const waveHeight = hasWave ? mdaily.wave_height_max[i] : null;
   const swellHeight = mdaily && mdaily.swell_wave_height_max && mdaily.swell_wave_height_max[i] != null ? mdaily.swell_wave_height_max[i] : null;
+  const skyLabel = daily.weather_code && daily.weather_code[i] != null ? weatherCodeLabel(daily.weather_code[i]) : null;
+  const rainProb = daily.precipitation_probability_max && daily.precipitation_probability_max[i] != null ? daily.precipitation_probability_max[i] : null;
+  const rainSum = daily.precipitation_sum && daily.precipitation_sum[i] != null ? daily.precipitation_sum[i] : null;
 
   return (
     <div className="card">
@@ -2274,6 +2296,16 @@ function ForecastSection({ weather, marine, windUnit, seaward }) {
         <div className="stat">
           <span className="label">WIND DIR{shore ? ` · ${shore.toUpperCase()}` : ''}</span>
           <span className="value">{windDir != null ? compassLabel(windDir) : '—'}</span>
+        </div>
+        <div className="stat">
+          <span className="label">SKY</span>
+          <span className="value">{skyLabel || '—'}</span>
+        </div>
+        <div className="stat">
+          <span className="label">RAIN</span>
+          <span className="value mono">
+            {rainProb != null ? `${rainProb}%` : '—'}{rainSum != null ? ` · ${rainSum.toFixed(1)}mm` : ''}
+          </span>
         </div>
         {hasWave && (
           <React.Fragment>
@@ -2316,6 +2348,8 @@ function GaugeView({ weather, marine, windUnit, location, tideStations, onUpdate
   const windKn = cur.wind_speed_10m;
   const windDisplay = windUnit === 'mph' ? Math.round(windKn * KN_TO_MPH) : Math.round(windKn);
   const windUnitLabel = windUnit === 'mph' ? 'MPH' : 'KN';
+  const gustKn = cur.wind_gusts_10m;
+  const gustDisplay = gustKn != null ? (windUnit === 'mph' ? Math.round(gustKn * KN_TO_MPH) : Math.round(gustKn)) : null;
 
   let uvNow = null;
   if (hourly.uv_index && hourly.uv_index[nowIdx] != null) uvNow = hourly.uv_index[nowIdx];
@@ -2371,6 +2405,14 @@ function GaugeView({ weather, marine, windUnit, location, tideStations, onUpdate
           <span className="label">UV INDEX</span>
           <span className="value mono">{uvNow != null ? uvNow.toFixed(1) : '—'}</span>
         </div>
+        <div className="stat">
+          <span className="label">SKY</span>
+          <span className="value">{weatherCodeLabel(cur.weather_code) || '—'}</span>
+        </div>
+        <div className="stat">
+          <span className="label">PRECIP</span>
+          <span className="value mono">{cur.precipitation != null ? `${cur.precipitation.toFixed(1)} mm` : '—'}</span>
+        </div>
 
         <div className="wind-block">
           <WindCompass deg={cur.wind_direction_10m} />
@@ -2384,7 +2426,7 @@ function GaugeView({ weather, marine, windUnit, location, tideStations, onUpdate
                 <span className="lcd-unit" style={{ color: 'var(--ink-soft)', fontSize: 11 }}>{windUnitLabel}</span>
               </div>
               <div style={{ fontSize: 11, color: 'var(--ink-soft)', marginTop: 4, fontFamily: "'IBM Plex Mono', monospace" }}>
-                FORCE {bf.force} · {bf.label.toUpperCase()}
+                FORCE {bf.force} · {bf.label.toUpperCase()}{gustDisplay != null ? ` · GUSTS ${gustDisplay}` : ''}
               </div>
               {shoreWind ? (
                 <button
@@ -3049,6 +3091,9 @@ function LogEntryForm({ weather, marine, location, windUnit, entry, onClose, onS
     const pressure = val('pressure_msl'), temp = val('temperature_2m');
     const windSpeed = val('wind_speed_10m'), windDir = val('wind_direction_10m');
     if (pressure == null || temp == null || windSpeed == null) return null;
+    // Stored in the user's wind unit so display just rounds — earlier
+    // snapshots stored raw knots regardless of the mph setting.
+    const toUnit = (kn) => (kn == null ? null : windUnit === 'mph' ? kn * KN_TO_MPH : kn);
     const shore = location && location.seaward != null && windDir != null ? classifyShoreWind(windDir, location.seaward) : null;
 
     const mh = marine && marine.hourly;
@@ -3062,7 +3107,10 @@ function LogEntryForm({ weather, marine, location, windUnit, entry, onClose, onS
     }
     return {
       at: h.time[idx],
-      pressure, temp, windSpeed, windDir, windUnit, shore,
+      pressure, temp,
+      windSpeed: toUnit(windSpeed),
+      gusts: toUnit(val('wind_gusts_10m')),
+      windDir, windUnit, shore,
       waveHeight: mval('wave_height'),
       swellHeight: mval('swell_wave_height'),
       swellDir: mval('swell_wave_direction'),
@@ -3173,7 +3221,7 @@ function LogEntryForm({ weather, marine, location, windUnit, entry, onClose, onS
                 {snap.windDir != null && <WindCompass deg={snap.windDir} size={44} />}
                 <div className="stat">
                   <span className="label">WIND{snap.windDir != null ? `, FROM ${compassLabel(snap.windDir)}` : ''}</span>
-                  <span className="value mono">{Math.round(snap.windSpeed)} {snapUnit}</span>
+                  <span className="value mono">{Math.round(snap.windSpeed)} {snapUnit}{snap.gusts != null ? ` · G ${Math.round(snap.gusts)}` : ''}</span>
                 </div>
               </div>
             </div>
@@ -3397,7 +3445,7 @@ function LogDetailSheet({ entryId, onEdit, onDelete, onClose }) {
                     {w.windDir != null && <WindCompass deg={w.windDir} size={44} />}
                     <div className="stat">
                       <span className="label">WIND{w.windDir != null ? `, FROM ${compassLabel(w.windDir)}` : ''}</span>
-                      <span className="value mono">{w.windSpeed != null ? `${Math.round(w.windSpeed)} ${w.windUnit === 'mph' ? 'MPH' : 'KN'}` : '—'}</span>
+                      <span className="value mono">{w.windSpeed != null ? `${Math.round(w.windSpeed)} ${w.windUnit === 'mph' ? 'MPH' : 'KN'}${w.gusts != null ? ` · G ${Math.round(w.gusts)}` : ''}` : '—'}</span>
                     </div>
                   </div>
                 </div>
