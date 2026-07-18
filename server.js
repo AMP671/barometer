@@ -246,6 +246,56 @@ app.get('/api/geocode-places', async (req, res) => {
   }
 });
 
+// --- Norwegian official tides (Kartverket) --------------------------------
+// Kartverket's water-level API covers the Norwegian coast and Svalbard,
+// free under CC BY 4.0 (attribution shown in the UI). It interpolates
+// predictions to arbitrary coordinates from the station network and
+// reports out-of-coverage with a <nodata> element. Events are normalized
+// to the same shape as Admiralty's TidalEvents (DateTime/EventType/Height,
+// UTC, metres above chart datum) so the frontend renders both official
+// sources with one component.
+app.get('/api/no-tides', async (req, res) => {
+  const lat = parseFloat(req.query.lat), lon = parseFloat(req.query.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+    return res.status(400).json({ error: 'lat and lon query params required' });
+  }
+  const fmt = (d) => d.toISOString().slice(0, 16);
+  const from = new Date(), to = new Date(Date.now() + 7 * 86400000);
+  const url = `https://vannstand.kartverket.no/tideapi.php?tide_request=locationdata&lat=${lat}&lon=${lon}` +
+    `&datatype=tab&refcode=cd&fromtime=${fmt(from)}&totime=${fmt(to)}&interval=10&dst=0&tzone=0&lang=en`;
+  try {
+    const upstream = await fetch(url, {
+      headers: { 'User-Agent': 'BarometerPWA/1.0 (personal-use weather app)' },
+    });
+    if (!upstream.ok) return res.status(502).json({ error: `Kartverket returned ${upstream.status}` });
+    const xml = await upstream.text();
+    const events = [];
+    const re = /<waterlevel\s+([^/>]*)\/>/g;
+    let m;
+    while ((m = re.exec(xml))) {
+      const value = /value="([^"]*)"/.exec(m[1]);
+      const time = /time="([^"]*)"/.exec(m[1]);
+      const flag = /flag="([^"]*)"/.exec(m[1]);
+      if (!value || !time || !flag) continue;
+      const t = new Date(time[1]);
+      if (Number.isNaN(t.getTime())) continue;
+      events.push({
+        DateTime: t.toISOString(),
+        EventType: flag[1] === 'high' ? 'HighWater' : 'LowWater',
+        Height: parseFloat(value[1]) / 100, // API reports centimetres
+      });
+    }
+    if (events.length === 0) {
+      return res.status(404).json({ error: 'No tide data for this location (outside Kartverket coverage)' });
+    }
+    const nameMatch = /<location [^>]*name="([^"]*)"/.exec(xml);
+    res.json({ name: nameMatch ? nameMatch[1] : 'Norway', events });
+  } catch (err) {
+    console.error('GET /api/no-tides failed', err);
+    res.status(502).json({ error: 'Kartverket lookup failed' });
+  }
+});
+
 // --- Seaward direction (auto coast orientation) ---------------------------
 // OSM's natural=coastline ways follow a hard mapping convention: land is on
 // the left of the way's direction, water on the right. So the compass

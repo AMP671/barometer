@@ -1478,6 +1478,14 @@ async function fetchTideEvents(stationId) {
   return r.json();
 }
 
+// Norwegian official tides (Kartverket, via our proxy) — same normalized
+// event shape as Admiralty, so one card component renders both.
+async function fetchNoTides(lat, lon) {
+  const r = await fetch(`/api/no-tides?lat=${lat}&lon=${lon}`);
+  if (!r.ok) throw new Error('kartverket tides fetch failed');
+  return r.json();
+}
+
 // Auto coast orientation — the nearest OSM coastline segment's seaward
 // normal (see /api/seaward on the server for how). Returns
 // { seaward: degrees | null } — null means no coastline within range,
@@ -2025,6 +2033,42 @@ function DayTabs({ days, selected, onSelect }) {
 --------------------------------------------------------------------- */
 const TIDE_STATION_MAX_KM = 40;
 
+// Shared renderer for official tide tables — Admiralty (UK/Ireland) and
+// Kartverket (Norway) both normalize to the same event shape, so the only
+// differences are the label and the attribution each licence requires.
+function OfficialTideCard({ label, events, attribution, emptyHint, dayIdx, onDayIdx }) {
+  const now = Date.now();
+  const upcoming = events.filter((e) => parseAdmiraltyTime(e.DateTime).getTime() > now);
+  const days = groupEventsByDay(upcoming);
+  const activeIdx = Math.min(dayIdx, Math.max(0, days.length - 1));
+  const activeDay = days[activeIdx];
+  return (
+    <div className="card">
+      <div className="card-label">{label}</div>
+      {days.length === 0 ? (
+        <p className="empty-hint" style={{ padding: 0 }}>{emptyHint}</p>
+      ) : (
+        <React.Fragment>
+          <DayTabs days={days.map((d) => d.date)} selected={activeIdx} onSelect={onDayIdx} />
+          <div style={{ marginTop: 10 }}>
+            {activeDay.events.map((e, i) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderTop: i > 0 ? '1px solid var(--line)' : 'none' }}>
+                <span style={{ fontSize: 14 }}>{e.EventType === 'HighWater' ? 'High Water' : 'Low Water'}</span>
+                <span className="mono" style={{ fontSize: 14 }}>
+                  {parseAdmiraltyTime(e.DateTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {e.Height != null ? `${e.Height.toFixed(1)} m` : '— m'}
+                </span>
+              </div>
+            ))}
+          </div>
+        </React.Fragment>
+      )}
+      <div style={{ fontSize: 10, color: 'var(--ink-soft)', marginTop: 10, fontFamily: "'IBM Plex Mono', monospace" }}>
+        {attribution}
+      </div>
+    </div>
+  );
+}
+
 function TideSection({ location, tideStations, marine, currentTime }) {
   const [events, setEvents] = useState(null);
   const [loadError, setLoadError] = useState(false);
@@ -2054,41 +2098,49 @@ function TideSection({ location, tideStations, marine, currentTime }) {
     fetchTideEvents(stationId).then(setEvents).catch(() => setLoadError(true));
   }, [stationId]);
 
-  useEffect(() => { setDayIdx(0); }, [events]);
+  // Norway/Svalbard: Kartverket's official tide tables, chosen
+  // automatically whenever the location falls inside the coverage box and
+  // no Admiralty station is in range — a second official source in the
+  // same fallback chain, no toggle. The box is generous; out-of-coverage
+  // spots inside it just fail the fetch and use the modeled curve.
+  const inNorway = location && location.lat >= 57 && location.lat <= 82 && location.lon >= 3 && location.lon <= 33;
+  const [noTides, setNoTides] = useState(null);
+  useEffect(() => {
+    if (station || !inNorway || !location) { setNoTides(null); return; }
+    let cancelled = false;
+    fetchNoTides(location.lat, location.lon)
+      .then((d) => { if (!cancelled) setNoTides(d && Array.isArray(d.events) && d.events.length > 0 ? d : null); })
+      .catch(() => { if (!cancelled) setNoTides(null); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stationId, inNorway, location && location.lat, location && location.lon]);
+
+  useEffect(() => { setDayIdx(0); }, [events, noTides]);
 
   // Official data available and loaded — this takes priority.
   if (station && events) {
-    const now = Date.now();
-    const upcoming = events.filter((e) => parseAdmiraltyTime(e.DateTime).getTime() > now);
-    const days = groupEventsByDay(upcoming);
-    const activeIdx = Math.min(dayIdx, Math.max(0, days.length - 1));
-    const activeDay = days[activeIdx];
     return (
-      <div className="card">
-        <div className="card-label">Tide — {station.name} (Official, UKHO)</div>
-        {days.length === 0 ? (
-          <p className="empty-hint" style={{ padding: 0 }}>
-            {station.name} returned no upcoming events — this station may have limited data at the source (some smaller ports do).
-          </p>
-        ) : (
-          <React.Fragment>
-            <DayTabs days={days.map((d) => d.date)} selected={activeIdx} onSelect={setDayIdx} />
-            <div style={{ marginTop: 10 }}>
-              {activeDay.events.map((e, i) => (
-                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderTop: i > 0 ? '1px solid var(--line)' : 'none' }}>
-                  <span style={{ fontSize: 14 }}>{e.EventType === 'HighWater' ? 'High Water' : 'Low Water'}</span>
-                  <span className="mono" style={{ fontSize: 14 }}>
-                    {parseAdmiraltyTime(e.DateTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {e.Height != null ? `${e.Height.toFixed(1)} m` : '— m'}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </React.Fragment>
-        )}
-        <div style={{ fontSize: 10, color: 'var(--ink-soft)', marginTop: 10, fontFamily: "'IBM Plex Mono', monospace" }}>
-          Contains ADMIRALTY® tidal data: © Crown copyright and database right — up to 7 days ahead (Discovery tier limit)
-        </div>
-      </div>
+      <OfficialTideCard
+        label={`Tide — ${station.name} (Official, UKHO)`}
+        events={events}
+        attribution="Contains ADMIRALTY® tidal data: © Crown copyright and database right — up to 7 days ahead (Discovery tier limit)"
+        emptyHint={`${station.name} returned no upcoming events — this station may have limited data at the source (some smaller ports do).`}
+        dayIdx={dayIdx}
+        onDayIdx={setDayIdx}
+      />
+    );
+  }
+
+  if (noTides) {
+    return (
+      <OfficialTideCard
+        label={`Tide — ${noTides.name} (Official, Kartverket)`}
+        events={noTides.events}
+        attribution="Tidal data © Kartverket (CC BY 4.0) — up to 7 days ahead"
+        emptyHint="No upcoming tide events returned for this spot."
+        dayIdx={dayIdx}
+        onDayIdx={setDayIdx}
+      />
     );
   }
 
@@ -2101,11 +2153,13 @@ function TideSection({ location, tideStations, marine, currentTime }) {
 
   const diagnostic = station && loadError
     ? `Couldn't load official data for ${station.name} right now — showing the modeled curve instead.`
-    : !tideStations || tideStations.length === 0
-      ? "Official station list didn't load — check the Admiralty API key on the server."
-      : nearestAny
-        ? `Nearest official station: ${nearestAny.name}, ${nearestAny.distanceKm.toFixed(0)} km away (outside the ${TIDE_STATION_MAX_KM} km range used here).`
-        : null;
+    : inNorway
+      ? "Couldn't load official Kartverket tides for this spot — showing the modeled curve instead."
+      : !tideStations || tideStations.length === 0
+        ? "Official station list didn't load — check the Admiralty API key on the server."
+        : nearestAny
+          ? `Nearest official station: ${nearestAny.name}, ${nearestAny.distanceKm.toFixed(0)} km away (outside the ${TIDE_STATION_MAX_KM} km range used here).`
+          : null;
 
   if (!hasTide) {
     return diagnostic ? <div className="empty-hint" style={{ margin: '0 14px 10px' }}>{diagnostic}</div> : null;
